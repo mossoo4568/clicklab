@@ -1313,8 +1313,19 @@ def meta_of(vid):
         except Exception:
             pass
     y = find_ytdlp()
-    rc, out, err = run([y, "-J", "--no-download", "--no-warnings",
-                        "https://www.youtube.com/watch?v=" + vid], timeout=120)
+    # Bot-check hamesha ek hi client par padta hai — tv/android/ios clients ko aksel
+    # allow mil jaata hai. Download wale raste par ye chain pehle se thi (isliye OCR
+    # chalta raha); ab metadata par bhi wahi chain — default fail ho to client badal
+    # kar dobara. cookies.txt rakha ho to run() usay apne aap laga deta hai.
+    rc = out = err = None
+    for cargs in (None, "youtube:player_client=tv", "youtube:player_client=android",
+                  "youtube:player_client=ios"):
+        cmd = [y, "-J", "--no-download", "--no-warnings"]
+        if cargs:
+            cmd += ["--extractor-args", cargs]
+        rc, out, err = run(cmd + ["https://www.youtube.com/watch?v=" + vid], timeout=120)
+        if rc == 0 and (out or "").strip():
+            break
     if rc != 0 or not (out or "").strip():
         e = re.sub(r"\s+", " ", (err or ""))[:140]
         hint = ""
@@ -2119,6 +2130,26 @@ def ocr_clean(txt):
         keep.append(t)
         prev = t
     return " ".join(keep)[:400]
+
+
+def ocr_screen_clean(txt):
+    """Screen-OCR (frames wala) text ki safai — line-line rehti hai, timestamp ke saath.
+    ocr_clean thumbnail-chip ke liye hai (jod kar 400 akshar); ye poora screen text hai,
+    is liye yahan koi jodna nahi — sirf kachra lines hataati hain (poori line me alfaz
+    se zyada nishan ho to wo line gayab). 60,000 akshar ki chhat, uske baad cut flag."""
+    out, prev = [], None
+    for ln in (txt or "").splitlines():
+        t = re.sub(r"\s+", " ", ln).strip()
+        if not t or t == prev:
+            continue
+        body = re.sub(r"^\d{1,2}:\d{2}[:\d]*\s*", "", t)  # timestamp hatakar body ka kachra check
+        al = sum(1 for ch in body if ch.isalnum())
+        if al == 0 or al < max(2, len(body)) * 0.45:
+            continue
+        out.append(t)
+        prev = t
+    s = "\n".join(out)
+    return s[:60000], len(s) > 60000
 
 
 def text_stats(path, an, words, faces=None):
@@ -8389,9 +8420,11 @@ class H(BaseHTTPRequestHandler):
                     finally:
                         lk.release()
                     # screen-OCR ka kachra user ko nahi dikhna chahiye — cache file
-                    # jaisi hai waisi rehti hai, safai bhejte waqt hoti hai
+                    # jaisi hai waisi rehti hai; safai bhejte waqt hoti hai, LINE-LINE
+                    # (timestamp ke saath) — jod kar 400 akshar karna yahan ghalat tha,
+                    # wo thumbnail-chip ka kaam hai; is se poora text 2 lines ban raha tha.
                     if r.get("text"):
-                        r["text"] = ocr_clean(r["text"])
+                        r["text"], r["cut"] = ocr_screen_clean(r["text"])
                     return self._send(200, r)
                 return self._send(200, tr_get(q.get("id") or ""))
             if u.path == "/api/trp":
@@ -8836,7 +8869,7 @@ tr:hover td{background:var(--rowbg)}td a{color:var(--tx2);text-decoration:none}t
 .fstep.dn{cursor:pointer;color:var(--tx2)}
 .chip.kwk{cursor:pointer;user-select:none;font-family:inherit}
 .chip.kwk.on{border-color:var(--acc);color:var(--tx)}
-.trbox{max-height:340px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r2);padding:10px 12px;font-size:var(--fs-dense);line-height:1.6;margin:6px 0 2px}
+.trbox{max-height:460px;overflow:auto;white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r2);padding:10px 12px;font-size:var(--fs-dense);line-height:1.6;margin:6px 0 2px}
 .srow{display:flex;align-items:center;gap:8px;margin:6px 0}
 .svbar{position:relative;flex:1;min-width:0;min-height:26px;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r1);overflow:hidden}
 .svbar i{position:absolute;left:0;top:0;bottom:0;background:rgba(45,212,191,.18)}
@@ -10805,7 +10838,7 @@ function trSecAt(i){const it=D.items[i],t=(D.tr||{})[it.id];
   '<button class="sm" disabled style="opacity:.5;cursor:progress">'+ico("file",14)+'Screen text (OCR) laao</button></div>';
  if(t&&t.text){const ocr=t.kind==="ocr";
   return '<div class="sec">'+(ocr?'Screen text (OCR) <small> — frames se padha gaya screen ka likha text; ye video ki awaz nahi</small>':'Transcription <small> — video ke apne subtitles, tool ka likha hua nahi</small>')+'</div>'+
-   '<div class="sub">'+esc(t.note||"")+(t.cached?' · ye pehle se cache me tha — dobara koi kharcha nahi':"")+(t.cut?' · text lamba tha, pehle 60,000 akshar dikhaye ja rahe hain':"")+(ocr&&t.frames?' · '+t.frames+' frames se padha gaya':"")+'</div>'+
+   '<div class="sub">'+esc(t.note||"")+(t.cached?' · ye pehle se cache me tha — dobara koi kharcha nahi':"")+(t.cut?' · text lamba tha, pehle 60,000 akshar dikhaye ja rahe hain':"")+(ocr&&t.frames?' · '+t.frames+' frames se padha gaya':"")+(ocr?' · neeche wala box scroll karein — har line time ke saath andar hai, sirf pehli kuch lines nahi':"")+'</div>'+
    '<div class="trbox">'+esc(t.text)+'</div>';}
  if(t&&t.error){return '<div class="sec">Transcription</div><div class="err">'+esc(t.error)+'</div>'+
    '<div class="bar"><button class="go" onclick="trGo('+i+')">'+ico("file",14)+'phir se koshish karo</button>'+
