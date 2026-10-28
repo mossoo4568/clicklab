@@ -668,6 +668,30 @@ def kw_find(niche, style):
 # disk par cache ho jata hai (funnel ke "manual hi chale" rule ke saath).
 TR_DIR = OUT / "tr"
 
+# Screen-OCR ka shor rokne ke liye: ek video par ek hi OCR job chale (dusra caller
+# chupchap pehle wale ke khatam hone ka intezaar kare, phir cache se le). Sath me
+# live progress — UI "frame 34/60" dikha sakta hai, andhere me ghanta nahi ginta.
+_TR_LOCKS = {}
+_TRP = {}
+_TR_M = threading.Lock()
+
+
+def _tr_lock(vid):
+    with _TR_M:
+        return _TR_LOCKS.setdefault(vid, threading.Lock())
+
+
+_LOG_M = threading.Lock()
+
+
+def _log(msg):
+    """cmd/console par ek line — threads se bhi aati hai to koi adhoori line nahi."""
+    with _LOG_M:
+        try:
+            print(msg, flush=True)
+        except Exception:
+            pass
+
 
 def _tr_vtt(vtt):
     """WebVTT ko plain text banana hai: timestamps aur tags hatado, aur auto-subtitles
@@ -698,6 +722,7 @@ def tr_get(vid):
     cmd = [find_ytdlp(), "--skip-download", "--no-warnings", "--write-auto-subs",
            "--write-subs", "--sub-langs", "en.*,ur.*,hi.*", "--convert-subs", "vtt",
            "-o", str(TR_DIR / (vid + ".%(ext)s")), "https://www.youtube.com/watch?v=" + vid]
+    _log("tr %s: YouTube se subtitles fetch ho rahe hain..." % vid)
     r = run(cmd, timeout=120)
     # 429 (Too Many Requests) YouTube ka temporary rate-limit hai, tool ki kharabi
     # nahi — ek baar 4 second ruk kar dobara maango, tabhi haar maano.
@@ -721,6 +746,7 @@ def tr_get(vid):
             pass
     if not txt:
         if r[0] == 0:
+            _log("tr %s: is video par subtitles maujood hi nahi" % vid)
             return {"error": "is video ke subtitles YouTube par nahi hain (na manual, na auto) — "
                              "yahan transcription nahi, analysis hi sahi"}
         e = ((r[2] or r[1] or "").splitlines() or ["?"])[-1][:200]
@@ -732,6 +758,7 @@ def tr_get(vid):
                     "export kar ke ClickLab folder me cookies.txt rakh dein — aksar ye wahi "
                     "raasta hai.")
         return {"error": "yt-dlp subtitles nahi la saka: " + e + hint}
+    _log("tr %s: subtitles aa gaye (lang=%s, %d akshar) — cache me save" % (vid, lang or "?", len(txt)))
     cut = len(txt) > 60000
     txt = txt[:60000]
     fp.write_text(txt, encoding="utf-8")
@@ -762,6 +789,8 @@ def tr_ocr(vid):
         return {"error": "Pillow/OCR engine is process me chala hi nahi — screen text OCR mumkin nahi"}
     wd = TR_DIR / (vid + ".frames")
     try:
+        _TRP[vid] = {"stage": "download", "done": 0, "total": 0}
+        _log("tr-ocr %s: video ka sabse chhota format download + frames nikalna shuru..." % vid)
         shutil.rmtree(wd, ignore_errors=True)
         wd.mkdir(parents=True)
         ytdlp = find_ytdlp()
@@ -786,6 +815,7 @@ def tr_ocr(vid):
                 except Exception:
                     pass
         if not vids:
+            _log("tr-ocr %s: NA-KAM — video download nahi ho saka: %s" % (vid, last_err))
             return {"error": "video download nahi ho saka: " + last_err}
         vf = vids[0]
         dur = 0.0
@@ -806,6 +836,8 @@ def tr_ocr(vid):
         if not frames:
             return {"error": "frames nahi ban sake (ffmpeg): " +
                              (((r2[2] or r2[1] or "").splitlines() or ["?"])[-1])[:200]}
+        _TRP[vid] = {"stage": "ocr", "done": 0, "total": len(frames)}
+        _log("tr-ocr %s: %d frames bane — ab har frame ka alag OCR/API call (ye slow hissa hai)" % (vid, len(frames)))
 
         def frame_lines(p):
             ws = ocr_words(str(p)) or []
@@ -834,6 +866,8 @@ def tr_ocr(vid):
 
         got, prev = [], None
         for i, p in enumerate(frames):
+            _TRP[vid]["done"] = i + 1
+            _log("tr-ocr %s: frame %d/%d ka OCR shuru" % (vid, i + 1, len(frames)))
             tsec = int(i * step + step / 2)
             stamp = "%02d:%02d" % (tsec // 60, tsec % 60)
             for s in frame_lines(p):
@@ -843,7 +877,9 @@ def tr_ocr(vid):
                     continue
                 prev = s
                 got.append((stamp, s))
+        _log("tr-ocr %s: saare %d frames ka OCR khatam — ab lines jod kar cache likh raha hoon" % (vid, len(frames)))
         if not got:
+            _log("tr-ocr %s: NA-KAM — frames me koi saaf text nahi padha gaya" % vid)
             return {"error": "frames me koi saaf text nahi padha gaya — ho sakta hai is video "
                              "me screen par likha ho hi na (ya text itna chhota/bahut tez badla "
                              "ho ke OCR na pakad saka)"}
@@ -851,6 +887,7 @@ def tr_ocr(vid):
         cut = len(text) > 60000
         text = text[:60000]
         fp.write_text(text, encoding="utf-8")
+        _log("tr-ocr %s: MUKAMMAL — %d screen-text lines, cache me save (ab kabhi dobara API kharcha nahi)" % (vid, len(got)))
         return {"ok": True, "vid": vid, "kind": "ocr", "text": text, "cut": cut,
                 "frames": len(frames), "step": int(step),
                 "note": "ye SCREEN par dikha hua text hai — har ~%d second ke frame ka OCR, "
@@ -858,6 +895,7 @@ def tr_ocr(vid):
                         "nahi), aur beech ke chhote/tez badle hue text chhoot sakte hain." % int(step)}
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+        _TRP.pop(vid, None)
 
 
 # ---------------- jeet ka model-verdict (Gemini → Pollinations → saaf inkaar) ----------------
@@ -1849,6 +1887,8 @@ except Exception:
     pass
 _GEM_OCR_TS = []
 _GEM_OCR_LK = threading.Lock()
+_GEM_OCR_FAIL = [0]   # lagataar Gemini-OCR khamiyan (hang/503/limit)
+_GEM_OCR_CUT = [0.0]  # is waqt tak Gemini OCR chhuka — seedha local engine
 
 
 def ocr_gem_set(on):
@@ -1863,9 +1903,14 @@ def ocr_gem_set(on):
 
 def _gem_ocr_limited():
     """10 minute ki khirki me 60 se zyada Gemini-OCR calls = bade scan ka bojh — uske
-    baad call apne aap local engine par jaati hai (free-tier saari jaldi khatam na ho)."""
+    baad call apne aap local engine par jaati hai (free-tier saari jaldi khatam na ho).
+    Isi khidki me lagataar 3 Gemini-OCR fail (hang/503/limit) ka matlab model atka hai —
+    10 minute ke liye seedha local engine, taake har frame par 45-45 second timeout na
+    lage. Camera/kaam rukta nahi, padhai ka engine badalta hai — ye cmd par bhi likhta hai."""
     now = time.time()
     with _GEM_OCR_LK:
+        if now < _GEM_OCR_CUT[0]:
+            return True
         _GEM_OCR_TS[:] = [t for t in _GEM_OCR_TS if now - t < 600]
         if len(_GEM_OCR_TS) >= 60:
             return True
@@ -1921,8 +1966,14 @@ def gem_ocr(path, scale_to=None):
                                       "JSON bhejo, usse pehle/baad ek lafz bhi nahi.")
         r = gem_try([GEM_MODEL] + GEM_MODEL_ALT,
                     [{"text": a2}, {"inlineData": {"mimeType": "image/jpeg", "data": b64}}],
-                    maxtok=2500, temperature=0.1)
+                    maxtok=2500, temperature=0.1, timeout=25)
         if r.get("error"):
+            with _GEM_OCR_LK:
+                _GEM_OCR_FAIL[0] += 1
+                if _GEM_OCR_FAIL[0] >= 3 and time.time() >= _GEM_OCR_CUT[0]:
+                    _GEM_OCR_CUT[0] = time.time() + 600
+                    _log("gem-ocr: lagataar %d khamiyan (%s) — 10 minute ke liye padhai local "
+                         "engine (RapidOCR) se hogi; frame ka kaam rukega nahi" % (_GEM_OCR_FAIL[0], str(r.get("error"))[:80]))
             return None
         txt = (r.get("text") or "").strip()
         i, j = txt.find("{"), txt.rfind("}")
@@ -3895,7 +3946,7 @@ def gem_set_key(k, add=False):
 _gem_cur = [0]  # round-robin cursor: pichhli kaamyabi wahi se aage chalu hoti hai
 
 
-def gem_call(model, parts, maxtok=1500, temperature=0.4, mods=None):
+def gem_call(model, parts, maxtok=1500, temperature=0.4, mods=None, timeout=120):
     """Gemini ka ek generateContent call. mods=['TEXT','IMAGE'] wale model tasveer bhi
     de sakte hain. Jawab JSON me nahi, text ya image bytes me milta hai.
 
@@ -3918,7 +3969,7 @@ def gem_call(model, parts, maxtok=1500, temperature=0.4, mods=None):
                                      headers={"Content-Type": "application/json", "User-Agent": "clicklab"})
         try:
             try:
-                with urllib.request.urlopen(req, timeout=120) as r:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
                     j = json.loads(r.read().decode("utf-8", "replace"))
             except urllib.error.HTTPError as e0:
                 m0 = ""
@@ -3933,7 +3984,7 @@ def gem_call(model, parts, maxtok=1500, temperature=0.4, mods=None):
                         url, data=json.dumps({"contents": [{"role": "user", "parts": parts}],
                                               "generationConfig": gc}).encode(),
                         headers={"Content-Type": "application/json", "User-Agent": "clicklab"})
-                    with urllib.request.urlopen(req, timeout=120) as r:
+                    with urllib.request.urlopen(req, timeout=timeout) as r:
                         j = json.loads(r.read().decode("utf-8", "replace"))
                 else:
                     raise
@@ -8273,6 +8324,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        # cmd/console me har API call dikhe — chupchap nahi guzarti; aur jo kaam
+        # ghonton chalta hai uski barqadar progress usi ke neeche chhapti hai.
+        if u.path.startswith("/api/"):
+            _log("%s %s" % (time.strftime("%H:%M:%S"), u.path + (("?" + u.query) if u.query else "")))
         try:
             if u.path == "/":
                 return self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
@@ -8320,14 +8375,30 @@ class H(BaseHTTPRequestHandler):
                 # Transcription — sirf user ki request par (button), ek baar cache.
                 # ocr=1 wala rasta un videos ke liye jin par subtitles hi nahi:
                 # screen par likha text frames se padha jaata hai (upar tr_ocr).
+                # Per-vid lock: dobara dabane par doosra OCR job nahi chalta — wo
+                # pehle wale ke khatam hone ka intezaar karta hai, phir cache se le leta hai.
                 if pnum(q.get("ocr")):
-                    r = tr_ocr(q.get("id") or "")
+                    vid = re.sub(r"[^A-Za-z0-9_-]", "", q.get("id") or "")[:12]
+                    lk = _tr_lock(vid)
+                    if not lk.acquire(blocking=False):
+                        _log("tr-ocr %s: ye kaam pehle se chal hi raha hai — naya job shuru nahi, "
+                             "usi ke khatam hone ka intezaar (phir seedha cache)" % vid)
+                        lk.acquire()
+                    try:
+                        r = tr_ocr(vid)
+                    finally:
+                        lk.release()
                     # screen-OCR ka kachra user ko nahi dikhna chahiye — cache file
                     # jaisi hai waisi rehti hai, safai bhejte waqt hoti hai
                     if r.get("text"):
                         r["text"] = ocr_clean(r["text"])
                     return self._send(200, r)
                 return self._send(200, tr_get(q.get("id") or ""))
+            if u.path == "/api/trp":
+                # screen-OCR ki live progress (frame X/Y) — UI andhere me na ghume
+                vid = re.sub(r"[^A-Za-z0-9_-]", "", q.get("id") or "")[:12]
+                p = _TRP.get(vid)
+                return self._send(200, p if p else {"none": 1})
             if u.path == "/api/verdict":
                 # Jeetne walon ka model-verdict — sirf button par; chain upar vd_get me.
                 return self._send(200, vd_get(q.get("id") or "", bool(pnum(q.get("force")))))
@@ -10721,9 +10792,17 @@ function ideaThumb(n){const x=(IDEAPK.ideas||[])[n];if(!x)return;AQ.idea=x.t;AQ.
 // Aise videos (khamosh, quiz, text-only slides) ke liye doosra rasta hai: screen par
 // likha text frames ka OCR — dono ka matlab alag hai, is liye screen par bhi alag likha jaata hai.
 let TRJ=null;
+let TRP=null;
+function trpStop(){if(TRP){clearInterval(TRP);TRP=null}}
+function trpPoll(id){trpStop();TRP=setInterval(async()=>{let p;try{p=await j("/api/trp?id="+encodeURIComponent(id))}catch(e){return}
+ const el=$("#trp");if(!el){trpStop();return}
+ if(p.none)return;
+ el.textContent=(p.stage==="ocr")?("progress: frame "+(p.done|0)+"/"+(p.total|0)+" OCR ho chuka — thora rukein"):("video ka sabse chhota format download ho raha hai — thora rukein");},4000)}
 function trSecAt(i){const it=D.items[i],t=(D.tr||{})[it.id];
  if(TRJ&&TRJ.id===it.id)return '<div class="sec">'+(TRJ.ocr?"Screen text (OCR)":"Transcription")+'</div>'+
-  '<div class="sub">'+(TRJ.ocr?'video download + frames ka OCR chal raha hai — video ki lambai ke hisaab se ~1–3 minute lag sakte hain, ek hi baar; phir cache se seconds me. Is process me video ka sabse chhota format download hota hai.':'subtitles laaye ja rahe hain — kuch second, ek hi baar; dobara khulne par cache se seconds me.')+'</div>';
+  '<div class="sub"><span id="trp">'+(TRJ.ocr?"video ka sabse chhota format download ho raha hai…":"subtitles laaye ja rahe hain…")+'</span>'+(TRJ.ocr?' — chhoti video par ~1 minute, lambi (15+ minute) par 5–10 minute tak lag sakte hain, lekin ek hi baar; phir hamesha cache. Neeche wale button dubara dabane se doosra job nahi chalta — wahi kaam complete hoke milta hai.':' ek hi baar; dobara khulne par cache se seconds me.')+'</div>'+
+  '<div class="bar"><button class="go" disabled style="opacity:.5;cursor:progress">'+ico("file",14)+'Transcription laao</button>'+
+  '<button class="sm" disabled style="opacity:.5;cursor:progress">'+ico("file",14)+'Screen text (OCR) laao</button></div>';
  if(t&&t.text){const ocr=t.kind==="ocr";
   return '<div class="sec">'+(ocr?'Screen text (OCR) <small> — frames se padha gaya screen ka likha text; ye video ki awaz nahi</small>':'Transcription <small> — video ke apne subtitles, tool ka likha hua nahi</small>')+'</div>'+
    '<div class="sub">'+esc(t.note||"")+(t.cached?' · ye pehle se cache me tha — dobara koi kharcha nahi':"")+(t.cut?' · text lamba tha, pehle 60,000 akshar dikhaye ja rahe hain':"")+(ocr&&t.frames?' · '+t.frames+' frames se padha gaya':"")+'</div>'+
@@ -10737,14 +10816,14 @@ function trSecAt(i){const it=D.items[i],t=(D.tr||{})[it.id];
   '<div class="sub">is video ke subtitles laane ka kharcha: ek baar YouTube se subtitles (kuch second), phir hamesha cache. Kuch videos par subtitles hote hi nahi — wahan seedha likha jayega, jhooth nahi.</div>'+
   '<div class="bar"><button class="go" onclick="trGo('+i+')">'+ico("file",14)+'Transcription laao</button>'+
   '<button class="sm" onclick="trOcrGo('+i+')">'+ico("file",14)+'Screen text (OCR) laao</button></div>'+
-  '<div class="sub">video khamosh hai ya sirf screen par text hai (quiz, slides)? Transcription khali aayega — doosra button us screen ka likha text frames se padhta hai (~1–3 minute, ek hi baar, phir cache).</div>';}
+  '<div class="sub">video khamosh hai ya sirf screen par text hai (quiz, slides)? Transcription khali aayega — doosra button us screen ka likha text frames se padhta hai (chhoti video par ~1 minute, lambi par 5–10 minute tak — live progress dikhegi; ek hi baar, phir cache).</div>';}
 async function trGo(i){const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id};zoom(i);
  let r;try{r=await j("/api/tr?id="+encodeURIComponent(it.id))}catch(e){r={error:e.message}}
  TRJ=null;if(r.error&&/subtitles YouTube par nahi/.test(r.error))r.no_ocr=1;
  D.tr[it.id]=r;zoom(i);if(r.error)toast("transcription: "+r.error)}
-async function trOcrGo(i){const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id,ocr:1};zoom(i);
+async function trOcrGo(i){const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id,ocr:1};zoom(i);trpPoll(it.id);
  let r;try{r=await j("/api/tr?id="+encodeURIComponent(it.id)+"&ocr=1")}catch(e){r={error:e.message}}
- TRJ=null;if(r.error)r.no_ocr=0;
+ trpStop();TRJ=null;if(r.error)r.no_ocr=0;
  D.tr[it.id]=r;zoom(i);if(r.error)toast("screen text: "+r.error)}
 
 // Bulk transcription: chuni hui videos ke subtitles ek-ek karke — server jo pehle se
