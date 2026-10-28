@@ -1,0 +1,330 @@
+# ClickLab — UI/UX Design Brief
+
+**Product:** ClickLab — measure and improve the click: title + thumbnail analysis for YouTube videos.
+**Design direction:** "Obsidian Kinetic" — a near-black obsidian canvas, raised graphite surfaces with hairline edges, one Electric-Cyan emissive accent, crimson reserved for destruction, Plus Jakarta Sans display over Inter body. Data-forward, no decoration without a job.
+**Status:** implemented in `clicklab.py` (single-file app: inline `<style>` + `<script>`). This brief documents the design system as built (supersedes the earlier "Aurora Ink" pass), and serves as the hand-off kit for any future development. Current pass adds: the rebuilt app shell (grouped sidebar, Home landing), the Home dashboard, the Outlier radar, bulk-select in the Studio table, the Testing hub that merges Title Lab + A/B into one tabbed workspace, and the comparison hero pass — `cmpc` rebuilt as summary strip → verdict card → chart Overview → scoreboard, plus a Timing & pattern tab (upload day/hour heatmaps, length, mix, title style, common words) (details in §4).
+
+---
+
+## 1. Product essence
+
+ClickLab answers one question: *why don't people click?* It measures real thumbnails and titles against what performs in a niche, and shows the gap with evidence, not vibes. The design must therefore read as an **instrument**, not a dashboard toy: dense data first, decoration last — but an instrument can still be beautiful. Premium here means *precise materials*: an obsidian base, surfaces that step up in flat tiers (E1 → E2 → E3), hairline borders instead of heavy shadows, and one accent light that behaves like electricity — it glows where interaction is possible and stays out everywhere else.
+
+Everything visible shares one token source (`:root` in the stylesheet). No component writes its own color or size. That single rule is what keeps 16 views feeling like one product.
+
+**What is deliberately not here:** monetization reports, comments, copyright, subtitles, audience demographics. The tool measures titles and thumbnails; those domains have no measured data behind them, so they get no placeholder screens — an honest absence beats a fake dashboard.
+
+## 2. Design principles
+
+1. **Density is a feature.** This is an analysis tool; the type scale stays compact (13–14px body). Premium comes from contrast, spacing rhythm and material tiers — not from enlarging everything.
+2. **One current, one glow.** Electric Cyan (`--acc`) is the only "on" state: primary actions (solid cyan, ink-black text), active nav, focus rings, row-hover accent bar, score emphasis. Hover on cards is *emissive* — the border lights up, the card does not lift. Crimson (`--bad`) is never a text color at small sizes; it appears as a fill with dark ink or as a badge edge, and always means destructive or broken.
+3. **Depth is tiered, not atmospheric.** Surfaces step flatly: canvas `#0F1117` → E1 `#1A1D26` (hairline `#2E364B` at 60%) → E2 `#222736` (soft shadow + 1px inset top highlight) → E3 modals (cyan-diffuse shadow). No gradients as wallpaper — the old aurora blobs are gone; the single top wash gradient is static and near-invisible. Glass (blur) is reserved for chrome that floats over content: top bar, sticky header. Content panels stay opaque so sticky table headers never smear.
+4. **Readable first, loud second.** The reference palette is tuned for contrast: muted text is `#8695ab` (≥4.5:1 on E1), score text red is `#ff6b6b` (raw `#FF0033` only as fill), `#64748b` is decorative-only. Data numbers use tabular figures everywhere; KPI figures use the display face at 26px/700.
+5. **Motion confirms causality.** Page content rises in reading order; cards reveal as they enter the viewport; buttons respond under the pointer within 100ms. Every animation is reversible, interruptible, and off by `prefers-reduced-motion`.
+6. **Honesty in copy and in scope.** "measured", "estimate", "not re-measured", "permanent" — the UI never claims more than the data supports. No emoji, sentence case, no marketing voice (`_EN.md` rules). The same honesty governs what is *not* built: a view, card, or number appears only when real measured data feeds it (Outlier radar returns nothing on <6 measured items; CSV leaves unmeasured fields empty; Home says so when a scan is thin).
+
+## 3. App flow & user journey
+
+```
+Launch → Home (real record: scan count, videos measured, latest-vs-benchmark hero,
+           top performers, recent scans — everything from stored scans, nothing invented)
+    → pick/create channel or topic scan
+    → Competitors (how my topic performs vs the niche) / Channel analytics
+    → Scan history (every scan ever run, newest first — restore or remove any)
+    → Deep analysis (per-video evidence: faces, text, contrast, framing)
+    → Fix it: Testing hub (Title Lab + A/B tabs) / My thumbnail / AI thumbnail
+    → Calibrate: Your CTR (import real CTR → weights become real)
+    → Learn: How thumbnails get generated / How the tool works
+```
+
+- **First run (no scans):** Home shows an onboarding card with the two ways to create a scan — it must look finished, not empty.
+- **Return user:** state (channel + scan) is remembered; deep links (`#/act/<scanid>`, `#/deep/<scanid>`) restore the exact view. `Ctrl+K` opens the command palette for any view in two keystrokes — it is also the only route to Title Lab / A/B outside the hub, by design.
+- **Key actions** (always one solid cyan button in reach): new channel, new topic, run scan, generate, compare, calibrate. The top bar additionally carries the **History** button (clock icon) on every screen — the audit trail is never more than one click away.
+
+## 4. Screen-by-screen design
+
+All screens share: sticky top bar (back, title, context chip, History, search, shortcuts, export, primary action), fixed sidebar, content column max-width 1280px. Content blocks rise in with a 50ms stagger on entry.
+
+**The shell (as rebuilt this pass).** The sidebar is a flat list of icon+label rows grouped under micro-labels — Main (Home), Channel (Channel analytics, Scan history, Channel history, Channel comparison), Work (Competitors, Deep analysis, Topics→ideas, My thumbnail, AI thumbnail, Testing hub, Your CTR), Help (Generation explainer, How it works). No pills, no indent tricks: the active row gets an E2 inset flush to the sidebar edge, cyan text, and a 2px cyan left accent bar. The sidebar foot carries Settings/Help links. Home additionally renders a compact nav mini-card (the same groups, as cards) so the map is learnable from the landing screen. Every view heading follows one pattern: `h2/h1 + icon + one-line .sub explaining what the numbers are and are not`.
+
+1. **Home (`home`)** — the landing dashboard, built only from stored scans (details below).
+2. **Competitors (`cmp`)** — meta chips (sample, measurement, weights); a KPI strip (videos measured, in your topic, median views/day, median score, text size, contrast); the Outlier radar (details below); a collapsible full-accounting panel; "what goes wrong most" findings list with severity icons; "how these people make thumbnails" color/word frequency chips; then the thumbnails grid or the Studio table (Cards/Table segmented control). Score badges are dark chips with a `currentColor` edge and a faint glow — the number's own color IS the severity.
+3. **Scan history (`act`)** — the audit trail (§7).
+4. **Channel analytics (`ch`)** — channel KPIs, upload cadence, speed of new vs old, and the Studio table with bulk-select (details below).
+5. **Channel history (`hist`)** — one channel across snapshots; source of each reading is stated (scan/backfill/manual/refresh).
+6. **Channel comparison (`cmpc`)** — your channel vs saved competitor channels; the hero pass (details below).
+7. **Deep analysis (`deep`)** — pattern × views/day medians, honest ×1.0 baseline.
+8. **Winning topics → ideas (`ideas`)** — winners by views/day; every suggestion cites its source video.
+9. **My thumbnail (`mine`)** — own file vs the measured benchmark, real YouTube sizes.
+10. **AI thumbnail (`ai`)** — Runware generation with cost shown before spend.
+11. **Testing hub (`hub`)** — Title Lab and A/B variants as two tabs in one workspace (details below). Title lab (`tl`) and A/B (`ab`) remain standalone routes for deep links and the palette; the hub is the promoted entry.
+12. **Your CTR (`own`)** — import real CTR; weights become fitted, labeled as such.
+13. **How thumbnails get generated (`gen`)** — honest explanation of every route.
+14. **How the tool works (`help`)** — what is measured, what is not.
+
+### Home dashboard (`home`) — as built
+
+Home is the record, not a marketing screen. Every number is read from the scan store at render time.
+
+- **Page header:** scan count pill, one line stating the ground rule ("every number is from a measured scan; 'benchmark' always means the median of that same scan — no internet average"), then the two creation actions and telemetry (videos measured, last scan, Scan history shortcut).
+- **KPI row (4 tiles):** scans on record / videos measured / channel scans / topic scans. Same tile rules as the KPI strips elsewhere.
+- **Hero split (`.hsplit`):** left = the most interesting single video from the current scan — for a channel scan its newest upload, for a topic scan its top performer by views/day — thumbnail, title, views/day vs the scan median (×multiple); right = top performers strip (5 rows, each row links into that video's analysis). If the current scan has nothing measured, the hero says so plainly instead of showing a placeholder.
+- **Ideas strip:** the current scan's top 3 title patterns, each citing its source video (same source-citing rule as `ideas`).
+- **Recent scans table:** last 8 scans (when, target, type badge, measured, open) — same TOPIC=cyan / CHANNEL=indigo badges as the audit trail; wrapped in `.st.stscr` so it scrolls inside itself, never sideways on the page.
+- **No scans at all:** an onboarding card (two routes: topic scan / channel scan) — the empty state is designed, not bare.
+- Layout rule that matters: `.hsplit>*{min-width:0}` — without it a nowrap title inside a card propagates its min-content width into the `1fr` grid track and the page scrolls sideways. Any new two-column split must keep this guard.
+
+### Outlier radar (`cmp`) — within-scan, not site-wide
+
+A strip of up to 4 cards: the videos in **this scan** running ≥1.5× the scan's own median views/day. Badge is SURGING (≥1.5×) or BREAKOUT (≥3×) — a filled pill on the card corner, cyan-tinted; BREAKOUT uses the accent fill with ink text. Each card shows the thumbnail, title, views/day, the ×multiple over median, and total views; clicking opens that video's analysis. The foot states the median and its sample size, and says outright this is not a site-wide comparison. If fewer than 6 measured items or no video clears 1.5×, the whole section renders nothing — silence over decoration.
+
+### Bulk-select in the Studio table (`ch`, and `cmp` in Table mode)
+
+The shared table engine gained a leading checkbox column and a fixed bottom drawer — the reference's video-library pattern, adapted. Selection is by video id and survives filtering and paging; it is cleared on view change (a stale selection bar over different data is a lie). The drawer states the count, splits it into "measured" vs "sirf-gini" (listing-only rows, whose numbers will be filled later), and offers only actions that genuinely work: CSV of the selection (measured rows carry full numbers; unmeasured rows carry title/URL and honestly empty fields), copy titles, clear. Select-all covers every filtered row across pages (a 284-row selection was verified), and the header checkbox always mirrors the current page's real state. A single checkbox toggles only its row's class — no full re-render, so scroll and focus survive.
+
+### Testing hub (`hub`)
+
+Title Lab and A/B variants merged into one tabbed workspace (segmented pills, panels render into `#hubc`). The standalone `tl`/`ab` routes stay for deep links and the palette; cross-links inside each panel route through the hub. Rules learned building it: a panel that renders into a sub-container must not call the full-page `spin()` (it replaces `#main` and destroys its own container mid-await), and after any await a panel checks it is still the requested tab. Mutating actions inside a panel re-render only that panel (`saveAB` switches the hub tab; `delAB` re-runs the panel).
+
+### Channel comparison (`cmpc`) — the hero pass
+
+Comparison is the feature friends actually open, so it reads like YouTube Studio: answer first, evidence below, tabs for depth. The old flat table is gone as an entry point; it survives as one tab.
+
+- **Order on the page:** picker → summary strip → verdict card → tab frame (Overview / **Timing & pattern** / Maap / Kaun jeeta / Kamai). Nothing asks the user to hunt for the point.
+- **Summary strip (`.cmpsum`):** one card per channel with a 2px channel-color top border; first card gets a cyan `mera` badge (selection order defines "mera" — significance lines compute against it). Rows: subscriber, videos counted, videos measured, median views/day, median engagement % (likes+comments ÷ views, longs only), uploads/week, days since last upload, thumb score/chapters. The second-and-later cards carry delta chips (`▲/▼` green/red, neutral gray) against the first card — honest percentages, even absurd ones (+269878% is what the data says). Thin samples print a loud warning line inside the card.
+- **Verdict card ("Is tulna se kya nikalta hai"):** plain-language findings — significant p-values, samples too small to decide (with a "Naap barhao" action that jumps into that channel's scan), silence ≥90 days, engagement winner, style differences (chapters/face/tags/words), rhythm gap, pattern insights (different peak upload day, different peak 3-hour window, median-length ratio ≥1.5, shorts-mix gap ≥25 pts, title-length gap ≥12 chars with a Title Lab jump, ≥3 common title words = same content space), and a permanent honesty line that trend ≠ better. Capped at 12 findings; pattern findings deep-link into the Timing & pattern tab; footer states "ye observation hai, experiment nahi".
+- **Overview tab (default):** four charts, all hand-drawn SVG, all from measured rows only — views/day dot strip (log scale, per-channel rows, median dash), monthly upload rhythm bars (last 12 months, publish dates of measured videos), thumbnail style radar (six axes each on its own natural unit, raw values printed in the legend because normalization stretches zeros), subscribers-over-time from history snapshots with an explicit fallback card when a channel has <2 snapshots. No chart is ever drawn from invented data; a missing chart says why and how to fix it.
+- **Kaun jeeta tab:** a scoreboard above the Mann-Whitney table — winner trophy per metric only where winning is meaningful (lower-is-better respected), a per-metric "Iska matlab" column, and a win tally with per-channel score. The p-value table below is unchanged (Mann-Whitney U, n≥6+6 gate, bar for farq).
+- **Timing & pattern tab:** the second half of comparison — not just who is ahead, but how each channel behaves. Six cards in the `.ovg` grid, each stating its own sample size: (1) **weekday bars** — grouped per-channel columns from every item's publish date (measurement not required; legend prints "gin X uploads" so the count is never hidden); (2) **day×hour heatmap** per channel — 7×24 grid, channel color, opacity by count, peak day + peak 3-hour window written under each heat; LONG items only and only those with an exact publish timestamp (`pubts`), so channel scans without it render an honest fallback card with a **"Waqt jodo"** action that calls `/api/tback` (metadata-only backfill, no thumbnail/score work), polls `/api/progress`, then reloads the comparison in place — verified end-to-end: fallback → click → real heat with 168 cells; (3) **length buckets** — `<2/2–5/5–10/10–15/15–20/20m+` bars + median minutes per channel (longs only, Shorts excluded); (4) **Shorts vs long mix** — stacked % bars from listing counts (400-cap shown as "+") plus the measured mix alongside; (5) **title style table** — median chars/words, % with numbers/ALL-CAPS/question/pipe separator/brackets/emoji, explicitly framed as "koi line jeeti nahi hoti — do deshs ka farq"; (6) **common title words** — words appearing in ≥2 different titles of ≥2 channels, shown as chips with per-channel counts in channel colors, framed as "same audience space", never a plagiarism claim; empty state explains what would fix it.
+- **Channel names:** always wrapped in `.cnm` (letter-spacing reset + word-spacing) — the global heading letter-spacing made two-word names render as "TechBurner"; verified visually at device scale.
+- **Server:** `ch_cmp` now returns per-channel `kind`/`cid`, an `en_med` engagement median, and a `charts` block (per-scan view/day + style + publish-month data, history series, plus `dow[7]`/`dow_n` from publish dates, `tm[168]`/`tm_n` from `pubts` (longs only), `dur[6]`/`dur_med` in minutes, and a `ttl` title-style stats object) so every chart computes from stored measurements, not client guesses. `ch_cmp` also returns `common` — top-14 shared title words (word = lowercase `[a-z\u0900-\u097F0-9]` run, len≥3, stopwords/digits skipped, deduped per title).
+- **Guard kept:** `runCmp` still reads selection from `#main input[type=checkbox]:checked` — the new strip/verdict add no checkboxes to `#main`, verified by the sweep.
+- **Verified:** `_p45.py` — 28/28 PASS (summary cards, delta chips, verdict + action buttons opening channel views, default Overview with 3+ chart SVGs, tab switching round-trip, scoreboard meaning/tally, thin-sample honesty lines with actions, honest chart fallbacks, 0 console errors, no horizontal overflow at 1344 and 390). `_p46.py` — 28/28 PASS for the Timing & pattern tab (all six cards render, weekday + length SVGs with peak/median legends, mix bars with listing counts, title table, common-words chips-or-honest-empty-state, per-channel heat cards with "Waqt jodo" fallback, full backfill loop producing a real 168-cell heatmap + peak line, ≥1 pattern insight in the verdict with deep-link button, tab round-trip tm↔maap↔ov, tm footer honesty note, 0 console errors, no overflow at 1344/390). Screenshots: `reports/clicklab/cmpc_*.png` incl. `cmpc_timing_desktop.png` / `cmpc_timing_mobile.png`.
+
+### Async render safety (all views)
+
+Every view render takes a token (`RTN`); after any await, a view writes to the page only if its token is still current. Without this, a slow view (e.g. Channel history fetching) clobbers whatever the user navigated to next — nav showing one screen, content showing another. Any new async view must capture the token at entry and check it before every write.
+
+## 5. Typography
+
+- **Display:** Plus Jakarta Sans 600/700/800 — brand mark, `h1–h4` (700, −0.025em tracking), KPI figures (26px, 700, tabular). Loaded from Google Fonts with system fallbacks.
+- **Body/UI:** Inter 400–700, 13–14px dense scale (`--fs-*` tokens). All numbers are `font-variant-numeric: tabular-nums`; the old mono face for numbers is gone — tabular Inter keeps columns aligned without a third voice.
+- **Never:** more than two families; no letter-spacing on body copy; no all-caps beyond micro-labels.
+
+## 6. Color system (tokens, as built)
+
+```
+canvas   --bg #0F1117 · wash: static cyan top-gradient ≤7% alpha, no blobs
+surfaces --panel E1 #1A1D26 (+ --line #2E364B @60% hairline)
+         --panel2 E2 #222736 (--sh2: 0 4px 20px −2px rgba(0,0,0,.45) + inset top highlight)
+         --panel3 hover/inset · --inbg #141721 inputs (darker than their surface)
+         --rowbg #1E2333 table-row hover · E3 modals (--sh3: cyan-diffuse)
+accent   --acc #00D2FF (solid buttons → ink text #002530; focus ring rgba(0,210,255,.35))
+         --acc2 #7FE6FF active nav text · --acc-hi hover · glow via --glow
+semantic --ok #10B981 measured/positive · --warn #F59E0B friction · --bad #FF0033 fill only
+         --bad #ff6b6b as small text (contrast override) · --nic #3B82F6 second data series
+text     --tx #F8FAFC · --tx2 #94A3B8 · --mut #8695ab (≥4.5:1) · --mut2 #64748B decorative only
+shape    --r0 4 · --r1 6 · --r2 8 (cards/inputs) · --r3 12 (modals) · --rp pill
+```
+
+Rules: cyan never as body text on obsidian at small sizes except micro-labels with a tinted background; crimson never as small text; indigo only as a second series (e.g. the CHANNEL badge in the audit trail pairs against cyan TOPIC); every interactive element shows its state (hover = emissive border, focus = cyan ring, active = cyan fill).
+
+## 7. Scan history & rollback (`act`) — the audit trail
+
+Added as the History feature: a visible **History** button in the top bar (clock icon, on every screen) plus a "Scan history" entry in the sidebar and command palette. It is a pure client-side view over the existing scan store — no new backend.
+
+- **Frame:** heading + one-line explanation ("Restore makes an older scan the current one — nothing is re-scanned and no stored data changes"), then a KPI strip (total scans / topic scans / channel scans / videos measured), then filter tabs with live counts (All / Topic / Channel) + search, then the trail table.
+- **Table:** When (absolute `Oct 24, 11:36 PM` + relative `1d 17h ago`, both derived from the scan's own `ts` — never from file mtime, so the two can't contradict), Target (channel @handle + subscribers, or requested→kept for topics), Type (TOPIC = cyan, CHANNEL = indigo, `current` = emerald), Measured count, Actions (restore / remove). Sorted strictly newest-first by scan time.
+- **Restore semantics:** restore only re-points `cur` at the saved snapshot and opens its view — zero re-scans, zero writes; safe on every row, hence no confirmation. **Remove** is destructive and confirms honestly ("Its saved data goes with it.").
+- **Empty states:** filtered-empty offers "Show all scans"; no-scans offers the two ways to create one.
+- The older **Channel history (`hist`)** view is unchanged — it trends one channel over time; `act` is the cross-scan audit. Both stay in the nav; they answer different questions.
+
+## 8. Components (as built)
+
+- **Buttons:** `.go` = solid cyan, ink text, hover brightens + glow (no gradient); ghost = hairline border, hover fills E2; destructive `.dg` = crimson text/edge. Pills/segments are pills (`--rp`), the selected segment is a cyan-tinted inset ring.
+- **Inputs:** `--inbg` (darker than their surface), hairline border, focus = 2px cyan ring; checkbox/radio `accent-color` cyan.
+- **Tables:** no zebra; 1px `--line2` row separators; row hover = `--rowbg` + 2px cyan inset left bar; sticky header on E1; sort affordance in cyan.
+- **Badges/chips:** score badge = dark bg + `currentColor` border + 10px glow (severity is the number's own color); status pills are `--rp` chips on E1; type badges tint their series color at ≤16% alpha.
+- **Cards:** E1 with hairline; hover = emissive cyan border + faint cyan glow, no lift; KPI tiles use the same rule.
+
+## 9. Motion
+
+- Entry: content blocks rise 8px/240ms, 50ms stagger; cards reveal on viewport entry (IntersectionObserver); no entrance without a reason.
+- Micro: hover/focus ≤120ms on `--e` curves; emissive transitions are border/shadow only — nothing translates.
+- Respect `prefers-reduced-motion`: everything above collapses to instant.
+- Data never animates its format; numbers don't count up.
+
+## 10. Accessibility & responsiveness
+
+- Contrast tuned at build time: all text tokens ≥4.5:1 on their actual surfaces (muted text override documented in §6); focus rings are 2px and always visible; icon-only controls carry `aria-label`s; tables use real `th`; modals are `role="dialog"` with labelled titles.
+- Breakpoints: 1000px (columns stack, table detail rows), 900px (sidebar becomes a top block, 44px touch targets, sticky header un-pinned), inline `min-width` on form fields is force-overridden on small screens so no page ever scrolls sideways.
+- Verified: all 16 routes render with zero console errors and `scrollWidth ≤ innerWidth` at 1344px and 390px; every button on every route was clicked in a scripted sweep without a single exception. Horizontal-scroll guards: every wide table sits inside `.st.stscr` (scrolls inside itself), and split layouts carry the `min-width:0` rule from §4 — a table or nowrap title must never widen the page itself.
+
+## 11. Token discipline & gates
+
+```
+color:  --bg --panel --panel2 --panel3 --line --line2 --inbg --rowbg
+        --acc --acc2 --acc-hi --nic --ok --warn --bad --ink --mut --mut2
+        --okrgb --warnrgb --badrgb --accrgb (for alpha tints)
+shape:  --r0 --r1 --r2 --r3 --rp   shadows: --sh2 --sh3   glow: --glow
+type:   --disp --body   scale: --fs-micro…--fs-kpi
+motion: --e --e2 --d1 --d2 --d3
+```
+
+**Extension rules for developers:** new component → use only tokens; one solid cyan action per region; crimson = destructive only; indigo = second series only; any new motion goes through `--e/--e*` and must respect the reduced-motion query; data never animates its format; copy follows `_EN.md` (sentence case, honest verbs); an async view must take the render token (§4, "Async render safety"); a new wide table goes inside `.st.stscr`; a new split layout keeps `min-width:0` on its children. The verification gates stay: `python -m py_compile clicklab.py` → `python _jscheck.py && node --check _js0.js` → browser sweeps (`_p42.py` feature sweep incl. hub/bulk/radar, `_p43.py` per-route content + palette + race regression, `_p44.py` selection UX) over all 16 routes at desktop and 390px with zero console errors and `scrollWidth ≤ innerWidth`.
+
+---
+
+## 12. Channel Tulna (cmpc) — Overview "ek nazar me" + Maap comprehensive table (this pass)
+
+User feedback: the old Overview (dot-strip, 2-month giant bars, style radar, 2-point subs line) read as "ajeeb o ghreeb", and the Maap tab had too few features. Rebuilt both; **Timing & pattern tab untouched**.
+
+- **Overview = 5 cards, all readable at a glance, no exotic charts:**
+  1. *Ek nazar me — side by side* (`cmVs`): 10 metric rows (subs, views/day, engagement, hit rate, uploads/week, days-since-upload, thumb score from the server rows with their `best` trophies; length, shorts-mix, title-length built client-side from stored measurements — marked "koi jeet nahi gini"). Each row = per-channel horizontal bars scaled to that row's max + the real value beside it.
+  2. *Views/day ka phailav* (`cmSpread`): per-channel log-scale range bar (min→max) with a median marker and a caption `kam X · median Y · zyada Z — N videos par naapa`. Replaces the dot-strip.
+  3. *Upload rhythm*: if the measured videos span <4 months, it says so honestly ("1 mahine gine gaye… pattern nikalna bekaar hai") and points to the Timing tab instead of drawing giant bars from 2 months.
+  4. *Thumbnail style ka farq* (`cmStyle`): horizontal bars per style axis with explicit caps (`— had 15`, `had 40`…) and a note that the radar was retired because it confused more than it told. Replaces the radar.
+  5. *Subscribers*: with <3 snapshots per channel it prints per-channel delta rows (`date: subs → date: subs — farq +X (Y din me)`) plus "2 records se trend ki line bharose layak nahi"; the line chart renders only when every selected channel has ≥3 snapshots.
+- **Maap = one comprehensive table, done well (`cmMaap`):** transposed — metrics are rows (each label carries its meaning via `CMPMEAN`), channels are columns (color dot, "mera" tag); 8 section rows (Aakaar · Raftaar · Reaction · Chhapaadatein aur length · Title ka style · Thumbnail style · Listing safai · Kamai) covering every server row plus client-built rows (`cmExtra`: median length, shorts mix, peak day/hour from `dow`/`tm`, six title-style rows from `ttl`). Winner cells get a trophy + `td.win` tint, micro-bars inside cells, sticky first column inside `.stscr`, and any missing value prints **"data nahi"** — never a fake zero. The old core/all toggle is gone (sections carry everything).
+- **Honesty contract kept everywhere:** every row states its n, thin samples flagged, the footer still says the drawings come "sirf unhi videos se" that were actually measured.
+- **Verified:** `_p47.py` — 31/31 PASS (5 overview cards, ≥8 side-by-side rows, no dot/radar shapes, spread captions, rhythm fallback, style caps, subs delta honesty, ≥6 maap section rows, all new row labels, winner markers, "data nahi" fallback wired, old toggle gone, Timing/sig/rpm tabs intact, tab round-trip, 0 console errors, no overflow at 1344/390). `_p45.py` updated for the new probes — 28/28. `_p46.py` (Timing suite) still 28/28 — the tab itself was not modified; only its round-trip probe now waits for `.vsr`.
+
+---
+
+## 13. Tulna paanch behtariyan (this pass) — user-reviewed gaps closed
+
+Live review of the whole comparison surfaced five real weaknesses; all five were implemented. Honesty rule unchanged: nothing faked, missing stays missing — but now every "missing" carries an action.
+
+1. **Maap ka CSV (`cmCsv`)** — button at the top of the Maap tab exports exactly the table on screen: `Section, Maap, Iska matlab` + one column per channel; rows follow the same `CMSEC` order, extras land under "Baaki". Cells carry **raw numbers** where they exist; unmeasured cells are left **empty** — the CSV never writes "data nahi" or an invented value. BOM for Excel, `clicklab-maap.csv` via the same Blob/download pattern as the Studio selection CSV.
+2. **Selection persistence** — `runCmp` stores the chosen ids in `localStorage.cl_cmpsel`; `cmpc()` restores them (filtered against still-existing scans; <2 valid → normal default). Page band karo, wapas aao — wahi channels chune. No hash/URL change; the checkbox-reading guard in `runCmp` is untouched.
+3. **Thin-sample verdict → action, not just a warning** — where the thin channel still has counted-but-unmeasured videos, the verdict button becomes **"20 videos bulk naap lo"**: `cmpMeas(id,n)` opens that channel and immediately starts the same measurement engine as "Poora channel naap lo" with n=20. If nothing is left to measure, the old "Naap barhao"/"Is channel ko naapo" (open the channel) stays. Same upgrade on the per-channel `meas<6` row.
+4. **Mobile Maap** (≤560px) — sticky metric column narrows (178–230px → 132–158px), the second "matlab" line inside each label collapses, and tapping the label cell expands it (`cmRowT` toggles `tr.mx`); the header hint `.mmh` explains the tap and only renders on mobile. Desktop layout untouched — meanings stay permanently visible.
+5. **Tally names no longer cut** — the "Kaun jeeta" line printed `slice(0,16)` names ("Your Level Up Gu 1"); it now prints full channel names. Table headers keep their existing truncation (scrollable, tooltip-free by design).
+
+Verified: `_p48.py` — 24/24 PASS (full names in tally, CSV button/download/row-parity with the table/sections/meaning column/no "data nahi" in the file, verdict+`cmpMeas` wiring and the live bulk button, mobile collapse/132px column/tap-expand/hint, reload-restore of the exact ids, 0 console errors, no overflow at 390 with Maap open). `_p47.py` 31/31, `_p45.py` 28/28, `_p46.py` 25/25 — Timing tab and all older flows intact.
+
+---
+
+## 14. Poori naap, hamesha (this pass) — measurement default + share package
+
+User's rule: channel kholo to **saari videos naapi jaayein** — kahin bhi chup-chap sampling nahi (channel analytics, tulna, har jagah).
+
+- **Default badla:** `CHN_DEF`/`CHN_MAX` 50→**400**, `CH_SHORT_MAX` 25→**400** (400 per type = yt-dlp listing cap; uske aage "+" dikhta hai). `goChan()` ne `&n=` bhejna chhoda aur channel-search card se **"videos to analyze" dropdown (25/50/100) poori tarah hata diya** — ab wahan koi chuna hua sample nahi, card ki copy hi kehti hai "measures every counted video — longs and shorts alike". `/api/chscan` bina `n` ke 400 leta hai (param abhi bhi clamp ke saath chalega — API todne wala nahi).
+- **Purane adhoore scans honest hi rehte hain:** "naap adhoora" chip + "Poora channel naap lo" / verdict ka bulk button pehle jaise `extend_chan` se baaki listing naap dete hain; koi scan chup-chaap rewrite nahi hota. New scans = new scan ids (poori listing), purani partial files history me apni sach ke saath.
+- **Proof:** bina-`n` chscan → `done:1/total:1` (1-video channel ki poori listing naapi); `chMeTable` copy ne "own 50 videos" se badalkar "measured videos (a new scan measures its whole counted listing, not a sample)" kiya. Suites: `_p45` probe fixes (verdict action filter `cmpMeas|cmpGo`; thick-sample no-nag contract) — 0 FAILS; `_p46`/`_p47`/`_p48` 0 FAILS par sab green.
+- **Backfill:** user ke saat adhoore channel scans (~3,846 videos) background me `chmore kind=all n=400` chain se poore naape ja rahe hain — engine wahi purana, bas default naya.
+- **Share package (`ClickLab-share.zip`):** fresh install — `clicklab.py` + `requirements.txt` + `setup.bat` (ab poori requirements.txt install karta hai) + `ClickLab.bat` + `SETUP.md` (saari requirements, key slots, run, fresh-start, naap-rule, troubleshooting) + user ka `README.md` + `thresholds_measured.json` (ye history nahi, tool ki apni naapi hui paimaana-failein hain). **Andar koi API key nahi** (user ka `runware_key.txt` zip se bahar — recipient apni key UI-box/env/`runware_key.txt` se lagata hai) aur **koi history/thumb_output/reports nahi**. Local install untouched — wahan key aur history jaise the waise hi hain.
+
+---
+
+## 15. Chhe API groups — bahar ki taqat, imaandari ke label ke saath (this pass)
+
+User ne poocha "aur free APIs se tool aur powerful ban sakta hai?" — jawab "6 ki 6" chuna gaya. Har integration ka rule: **ya to wo free/keyless hai, ya apni key maangti hai aur bina key ke apni gayab-honay ko saaf batati hai; kabhi nakli kaam nahi.** Har output par data-ka-srot label hai: naapa hua / model-andaza / community / unofficial.
+
+1. **SponsorBlock** (keyless, community data) — video row par "sponsor/self-promo segments (logon ke marks)". Single-video GET `/api/skipSegments?videoID=…&category=sponsor&category=selfpromo`; 404 = koi marks nahi → UI "—" + "ads na hone ka dawa nahi" (POST submit-endpoint hai, ye ghalti pehle pakdi gayi). **Live verified end-to-end**: `6y5hGiqd9rA` par asli marks (kul 0:53 self-promo, segments 8:27–9:06 aur 21:20–21:34) zoom view me dikhe, aur usi scan ki bina-marks video par honest "koi mark nahi" path. Channel table ka "Ads" column + topic scan ka zoom section — dono raste live. Attribution: github.com/ajayyy/SponsorBlock (docs: wiki.sponsor.ajay.app) — community-submitted marks.
+2. **YouTube Data API v3** (free quota, user key) — **Trending scan**: `chart=mostPopular` + `regionCode` (20 regions, default PK), ek call = 50 videos = **1 unit** (quota 10k/day), `videos?part=snippet,statistics,contentDetails,topicDetails`. Views/date/lambai API se aate hain — enrich skip; baaki poora naap wahi `measure_items` engine chalta hai (do raste nahi). Scan file me `trend:{region,name,src}` — UI me "YouTube ka APNA official chart" aur "topic-match ko zyada mat tollo" ki saaf warn. `topicDetails.topicCategories` (Wikipedia URIs) → item card par **"topic tag (official)"** chip. Key slots: `YT_API_KEY` env / `youtube_key.txt` / Trending card box; `/api/ytkey`, `/api/trend` job-based. **Pehle keyless short-circuit live tha; ab asli key ke saath bhi live verified — Pakistan ka official chart (GTA VI/Sidhu Moose Wala/Marvel), API ke views/lambai, aur `tq` official topic tags har item par. Scan `35bda3e85d31fa05` uska saboot hai.**
+3. **Gemini** (generativelanguage, user key, free tier) — do cheezein: **"Gemini se dekhwa lo"** (`/api/gemlook`) — Meri Thumbnail par vision model ki paanch-heading Roman-Urdu raye, heading "Model ka andaza — ye naap nahi, ek vision model ki raye hai" ke saath; aur AI Thumbnail engine option **"Gemini free tier"** (`gemini-2.5-flash-image`, `responseModalities:["TEXT","IMAGE"]`). Key slots `GEMINI_API_KEY`/`gemini_key.txt`/UI card; `rw_info()` me `gem` flag se UI ko pata chalta hai key hai ya nahi. **Vision live verified (asli trending thumbnail par paanch-point Roman-Urdu raye); image engine us key ke free quota me 429 deta hai — error asali dikhata hai, nakli tasveer nahi.** Model naam chain me likhe hain (`gem_try`: 404/503 par agla model; 3.8→3.5→2.5 text, 3.1→2.5 image) aur jo model jawab de wahi `model` field me lautata hai — pathar ka naam nahi.
+4. **Pollinations** (keyless image API) — AI Thumbnail ka muft engine: `GET image.pollinations.ai/prompt/…?width&height&nologo=true&seed` → bytes direct file me. **Live verified** (1024×576 aayi). Cost label "muft".
+5. **Reddit public feed + Google Trends (pytrends)** — "Bahar ki garmahat" card (Ideas page). Reddit: JSON → 403 par **RSS fallback** (stdlib XML); RSS me score/comment counts hote hi nahi → "—" aur saaf note "vote ginti is feed me nahi hoti". **Live verified: RSS se 12 posts.** pytrends: 12-mahine interest + related queries; `retries/backoff_factor` urllib3-2.x break se hatae; **live verified 53 weeks + 12 related queries** (pytrends ab requirements me optional line hai). Dono headers me **unofficial** likha hai; Trends sirf direction ("barh raha/gir raha") dikhata hai, exact search ginti ka dawa nahi.
+6. **Cross-platform (TikTok/Instagram) via existing yt-dlp** — Meri Thumbnail ka `#ref` ab TikTok/IG link bhi leta hai: `xplat_get()` → thumbnail + us platform ka apna views/uploader/lambai, 7-din cache; `cookies.txt` folder me ho to IG login khul jaata hai. Banner saaf kehta hai: "ye numbers platform ka apna diya hua hai — YouTube ke views se tulna mat karo; naap ek jaise hain". **Code path live verified (honest errors); TikTok is network par IP-blocked, IG login-wall — asli cross-platform thumbnail is network par test nahi hua.** Error me yt-dlp ki asli wajah dikhti hai — "ERROR:" line kaat ke dikhayi jaati hai, poonchh ka boilerplate nahi. Is group ka doosra hissa — ChannelCrawler subs-history — **jaan-boojh ke chhoda**: unki free API ab nahi (paid SaaS), aur subs-history ka kaam tool apne channel-scan snapshots se pehle se karta hai (koi teesra andaaza jodna zaroori nahi).
+
+Key-slot pattern ab chaar jagah same hai: env var → `<service>_key.txt` folder file → UI box; har feature bina key ke ya to keyless rasta use karta hai ya saaf "key nahi hai" kehta hai. `/api/scans` payload me `yt`/`trg`, `rw_info()` me `gem` — client ko sach ka pata, dikhawa nahi.
+
+**Gates:** `py_compile` + `_jscheck` + `node --check` — is pass ke baad bhi green. Backfill chain poori hui: aatho channel scans ab poore naape gaye hain (Dhruv Rathee 438/438, Sandeep Maheshwari 400/400 tak). Restart ke baad live re-verify: SponsorBlock (marks wale aur bina-marks dono raste, channel + topic dono views me), Pollinations, Gemini-keyless, Reddit-RSS, Trends, Trending-ka-keyless-inline-error — sab browser me live dikhe. TikTok/IG ka honest error bhi live. `_p45/_p47/_p48` mote data par dobara hare (p47 ka subs-delta assert purane wording ka tha — ab wo teeno honest branches qabool karta hai; history file abhi kisi channel ki nahi, is liye app "2+ snapshots nahi" wala sach dikhata hai). trending ab key ke saath live verified hai (upar); Gemini ka image engine free quota 429 par atka hai (error honest dikhta hai) aur TikTok-with-data = network ki wajah se ab bhi untested — ye baat SETUP.md me bhi isi tarah likhi hai.
+
+---
+
+## 16. Topic Funnel + transcription + Style jeet + competitors (this pass)
+
+User ka flow: "styles hain aur unke saath niches likhi hain… niche select karun to styles ka option aaye… us main tags finder aur keywords research jo trending ho usi niche aur style main… usi search kay agay unhin tags aur keywords kay use kr kay next trending aur winning topics… kisi bhi video kay sara ka sara analysis… transcription bhi… tool kholte hi direct search na ho, manual button se aage badhna chahiye — credits waste na hon."
+
+**Sakhti ka rule: funnel me ek bhi network call apne aap nahi hoti** — har step par explicit button; header copy yahi kehti hai "jab tak aap 'aage barho' na dabaao, ek bhi kharcha nahi hoga".
+
+- **Style catalog (`STYLES`, `styles_get`, `/api/styles`):** 19 styles, har entry `{"n":naam,"nic":niches list,"t":search seeds,"any":bool}` — "Any niche" styles `any:true`, "Coming soon" wali nahi rakhi. Niche select hone par client `funFit()` unhi styles ko upar rakhta hai jo us niche ki hain (Any-niche styles hamesha eligible).
+- **4-step funnel (`FUN`/`FUNM`, view `fun`):** 1 niche (list me se ya khud likho) → 2 us-niche ki styles → 3 keywords → 4 scan. Step 3 ka button `funKw()` → `GET /api/kwfind?niche=&style=` → `kw_find()`: style ke 3 seeds + niche-joined variants, YouTube ka **apna suggest box** (`suggest()`) + un searches ke **results ke titles ki n-gram ginti** (bigrams ×2 = mazboot signal, suggest-box words ×3 floor), `KW_STOP` filter. **Koi model nahi, koi API key nahi, koi naya naap nahi** — note likha aata hai "ye shabd suggest box + N results ke titles se gin kar ikatthe hue hain — asli tags har video ke scan par milte hain". User keywords chunta hai (toggle), ek "main" keyword; step 4 ka button purana `runScan(topic,n)` engine chalata hai (naya scan id) — baaki funnel state in-memory hai, scan data disk par.
+- **Transcription (`tr_get`, `TR_DIR=thumb_output/tr`, `GET /api/tr?id=`):** yt-dlp `--write-auto-subs --write-subs --sub-langs en.*,ur.*,hi.* --convert-subs vtt` → `_tr_vtt()` VTT ko plain text karta hai → `<vid>.txt` cache (dubbara click = zero network), 60k char cap. **Sirf button par** — zoom view me "Transcription laao" → `.trbox`, timestamp-click se player wahan jump. Header sach: "ye YouTube ke apne subtitles hain (manual ya auto-generated) — auto me galtiyan ho sakti hain"; subtitles na hon to saaf error.
+- **Style classifier + Style jeet (`_sty_pix`, `sty_measure`, `sty_fix`, `GET /api/sty`, `POST /api/stfix`):** thumbnail ke 64×36 pixels (PIL HSV) se rules-based bucket: `lineart`/`dark`/`photo`/`flat`/`unknown` — pixel rules, koi model nahi, is liye label "style ka andaza pixels se (tool ka classifier)". **Jeet ka naap views/day se (asli data)** — scan ke andar style-wise median vpd ki bars. User fix (`stfix`) hamesha classifier se pehle lagta hai ("aapki theek ki hui style agli naap me classifier se pehle lagti hai"). `d.sty`/`d.stfix` scan JSON me persist — `/api/data` wapas lautaata hai.
+- **Style-fit hint (Meri Thumbnail):** `do_check` ab `sty:_sty_pix(path)` bhi bhejta hai; `styFitHint(d)` user thumbnail ke bucket ko us scan ki sabse chalne wali style bucket se tulda hai — copy "ye poora tulna classifier ka andaza hai, guarantee nahi", kabhi "badlo" nahi kehta.
+- **Best competitors (`compSec`, client-only):** topic scan ki grid ke neeche — `D.items` ko `it.channel` se group karke median vpd se top-10; **har row par "kam bharosa — sirf 1 video dikhi" jaisa label**, header: "ye ranking isi scan ki videos ke views/day se hai — channel ke poore data se nahi". Row ka button `openChanQ()` → wahi channel scan flow.
+
+**Verification:** funnel live (`#/fun` stepper + honest copy), kwfind live (40 keywords, 30 results counted), transcription live (zoom me `.trbox` full text, cache se foran), style data live (scan `42d0c30c32b56079`: 12 me se 12 buckets + 1 user fix respected), fit hint live, competitors + chcmp live. **Ek operational sabak:** `_pNN.py` patch scripts idempotent tests nahi hain — dobara chalane par patches dobara lag jaate hain (duplicate HIST block/route/client view ban gaya tha); surgical line-based repair se theek kiya, aur ab regression checks sirf assertion suites (`_p42`–`_p48`, "FAILS: 0") + gates + live smoke hain, patch scripts kabhi dobara nahi. `_p47` ke do "FAILS" data-state par hain (smoke tests ne Dhruv ki history 5 snapshots kar di — ab 3+ wala honest graph aur uske circle dots expected hain, 2-record hedge copy gayab) — code regression nahi.
+
+
+
+## 17. Jeet ki guarantee, OCR, bulk API, model-verdict aur formula (this pass)
+
+User ki request: "50 kaha tha to 36 find hui dikhi — jitni kaha utni mile lazmi; total bhi dikhe, sirf jeetne wali bhi; awaz wali video na ho to screen-text (quiz type) bhi nikle; bulk API option ho, Gemini ki bhi YouTube ki bhi, limit lage to dusri API par jaye; tools me aur features."
+
+- **Count guarantee (`runScan` top-up rounds):** user ne N videos maangi to search rounds se kam aayi to tool chup-chaap doosre search terms/rounds se top-up karta hai jab tak N puri ho ya search ka asli stock khatam ho. Purani "36/50 maangi thi" wali khami khatam — grid aur KPI ab wahi dikhate jo maanga gaya.
+- **Total + jeetne wali ka count (KPI + filter):** cmp KPI strip me "jeetne wali (2×+)" tile (jeet = us scan ke views/day median ka 2×+, client `winOf()`), aur grid par filter segments "sab (N)" / "sirf jeetne wali (n)". "Jeetne wali chuno" selection me sab winners select hoti hain. Ye hamara apna rule hai, header me likha hai — YouTube ka official kuch nahi.
+- **OCR screen-text (`tr_ocr`, `/api/tr?id=&ocr=1`):** jis video par YouTube ke subtitles nahi (silent animation, quiz-type text-only videos) — uska screen ka text frames se nikalta hai: video download → frames → already-wala OCR pipeline (tesseract). Zoom me "Screen text (OCR)" button. Label: "ye screen par dikha hua text hai, boli ki hua kuch nahi".
+- **Bulk API operations (client `bulkTr(ocr)`):** selection bar me "Subtitles laao (bulk, 15 tak)" aur "Screen text OCR (bulk, 4 tak)" — chune gaye videos par ek-ek karke `/api/tr` calls, floating queue panel (progress, har row par "cache se 0 kharcha" ya error), limits honest; jo video bina subtitles wali hai uski row OCR ka rasta dikhati hai.
+- **Provider fallback chain (`llm_txt()`):** har model call pehle Gemini (aapki key) → 404/503/timeout par doosre Gemini models → phuot to muft Pollinations text endpoint. Har jawab ke saath `via` label: jawab dene wala model kaun hai, aur Gemini ki kami ki asli galti (`gem_err`) dikhti hai. Trending card par quota-403 ka apna honest error box (10k units/day, 00:00 Pacific reset) + free Topic-Scan ka rasta.
+- **Model-verdict (`vd_get`, `/api/verdict?id=`):** "sirf jeetne wali" filter par "Jeetne walon ka model-verdict laao" button — winners (max 10) + below-median losers (max 5) ka title/tags/thumbnail-text/VPD dekar model se strict-JSON patterns + per-video hypothesis maangta hai. Cache `thumb_output/verdict/<scan>-<winners-hash>.json` (dobara click = 0 kharcha), parse fail ho to model ka jawab jaisa tha waisa raw dikhta hai. Note hamesha: "ye model ki raay hai… sahy-sambandh hai, wajah sabit nahi".
+- **"Jeet ka formula?" card (client `formulaOf`, no model):** winners ≥5 aur baaki ≥5 hon tab hi — title lambai/number/CAPS/sawal %, tags %, thumbnail text ke shabd/area, chehra %/size — dono group ke medians ka table, "ginti hamari, faisla aapka" copy ke saath.
+
+**Verification:** count guarantee live (topic scan 50/50), KPI tile + filter live (14/50 winners, scan `a6c5ae413bdc13bc`), OCR live (P3bqGnJVgKI bina subtitles — screen text nikla), bulk queue live (cache + error rows), verdict live (Gemini 3.5 structured; Gemini down hone par Pollinations raw + `via`/`gem_err` honest), formula card live (14 vs 25 groups). **Do operational sabak:** (1) jeet ka rule client `winOf()` aur server `vd_get` me literal same hona chahiye — days missing→1 aur round-0-pool-se-bahar, dono taraf copy; warna filter aur verdict alag list dikhaate hain (ye hua tha, fix + comment code me). (2) Gemini models badalte rehte hain (2.5-flash "no longer available to new users" 404 deta hai, 3.8-flash bade prompt par 120s timeout karta hai) — is liye chain + timeout-retry + muft fallback hi sahi design hai, koi ek model kabhi assume nahi karna.
+
+## 18. Full-width layout, channel creation date, upload patterns aur Competitor bank (this pass)
+
+User ki request (screenshots ke saath): "adhi screen khaali kyun hai — professional nahi hai, isay set kro khobsurat bnao"; "jo bhi video aye uske saath ek 'Competitor banao' button ho — style/niche chuno, save ho jaye"; "channel creation time har jagah dikhe"; "last video kab upload hui, kis time upload karta hai — overall patterns".
+
+- **Full-width professional layout (M1):** `main` ab `max-width:1760px; margin:0 auto` par fluid hai — purani 1280px cap thi, is liye 2560/2730px screens par dayein taraf giant khaali patti banti thi. Ab content viewport ke saath badhta hai, itne par hi rukega jahan line-lambai padhne me mushkil ho (1760px center). Zoom ka do-baani wala grid `ztwo` (`minmax(360px,44%) minmax(0,1fr)`) — thumbnail column 44% se zyada nahi ghasatta, table baaki jagah le leta hai. Mobile suites (`_p42`,`_p45`–`_p47`) 390px par bhi overflow-free pass.
+- **Channel creation date (M3) — `chan_joined()` + `joined_or_oldest()`:** YouTube ka "Joined" date Data API me nahi hota — wo About page (`<url>/about?hl=en`, browser UA) ke HTML se regex se nikalta hai, cache `join_<md5>` (positive 7 din, negative sirf 6 ghante — network kabhi bhi ruk sakta hai). Na mile to scan ki sabse purani upload date, `src:"oldest"` label ke saath. **Source label har dikhane wali jagah lazmi:** "About page se" vs "sabse purani listing se — is se purana channel milna lazmi nahi". Dikhne ki jagah: chDash header chip + jnNote, zoom subheader, Channel history ka pehla line (`histMeta`), tulna (cmpc) ke summary card me "Channel bana" row, Maap table ke channel headers, aur Competitor bank. Purane scans ke liye ek button — `/api/join` (scan file me ek baar likh deta hai; `src:"oldest"` wali entry baad me About page se **upgrade** ho sakti hai — network aane par dobara click kaafi).
+- **Full publishedAt time (M2):** scan worker har item par `pt` (API ka ISO publishedAt) aur `pubts` (epoch) rakhta hai — new scans YouTube key se asli waqt lete hain; purane listings par `ts` andazan hota hai aur UI "listing ka andazan waqt" likhta hai. Table cell me date ke neeche time + source label, zoom me upload line + weekend flag. CSV export me naya `published_time` column (UTC ISO) — header/value counts aligned.
+- **Upload patterns (M4) — jo tha wahi theek dikha, naya chart nahi:** pehle se 7×24 hour heatmap, weekday table, `peak_day`/`peak_hour` rows, staleness/`per_week`/last30 KPIs मौjood thi — wording theek ki: "day-to-day farq is data me sahy-sambandh hai, wajah sabit nahi", aur ghari-level map ki jagah ka button (time backfill, 1 API unit per channel) wahi se point karta hai. "Naye scans me times apne aap aate hain jab YouTube key set ho" — honest promise, kyunki `pt` ab copy hota hai.
+- **Competitor bank (M5):** har video card aur zoom me "Competitor banao" → style dropdown (classifier ka andaza prefill, user ka chuna final — label dono alag), niche input (datalist = us scan ke topics), note → `POST /api/cmpbsave`. Record = us waqt ke scan ka snapshot (title/views/vpd "save ke waqt ke" label ke saath) + channel scan hone par subs, joined (source ke saath), aakhri upload ("listing ki reading"). `cmpbank.json` (OUT me, cap 500, dedupe by vid) — sidebar me naya "Competitor bank" view: KPI row (competitors/alag channels/niches), table with channel dates + "poora analysis" (scan switch karke us video ka zoom) + hatao. Network calls sirf explicit clicks par.
+
+**Verification:** 2400×1400 par `main` = 1760px centered, koi side-void nahi (screenshots); chDash chip "channel created 3 Jan 2021 · 5.8 years old" + honest oldest-note live; zoom subheader "channel bana … aakhri upload … raftaar" live; bank save→list→delete round-trip live (record me joined/lastup/vpd); cmpc summary "Channel bana" row + Maap header "bana … aakhri upload" live; CSV 47/47 columns aligned, `published_time` = "2026-10-24 03:30Z" vs UI 08:30 local (same instant, different label — UTC vs local, dono sahi); `_p42`–`_p48` sab green except `_p47` ke 2 jaane-pehchane data-state FAILS. **Sabak:** network aaj chala kal band — is liye negative cache chhota (6h) aur `oldest`→`about` upgrade path zaroori hai, warna ek transient timeout hamesha ke liye galat "pakki" date ban jaati.
+
+## 19. Saccha full-width + "Month by month — the channel against itself" (this pass, user screenshots ke baad)
+
+User ki 2730×1536 screenshots: 1760px cap par bhi dayein taraf ~360px khaali patti dikh rahi thi — "abhi bhi complete nahi hai … windows ka desktop size pata hai kya". Aur sawal: "kya channel ka apne aap se mahine-baar comparison ho sakta hai — views aur subscribers ka start se gain/drop".
+
+- **Ab koi page-level cap nahi:** `main` ka `max-width`/`margin:auto` hata diya — content sidebar ke baad jo jagah hai wahi bhar-ta hai (2730 viewport par `main` = 2463px, right margin 11px, verified). Jo ab bhi limit me hai wo sirf **prose** hai: `h2+.sub,.card>.sub{max-width:190ch}` — panel/chart/table poori width par, lambi paragraph lines padhne-layak lambai par. Zoom ka thumbnail column `min(44%,760px)` — bari screen par table dabega nahi. Ye "adhi screen khaali" ki aakhri shikayat ka seedha hal hai: cap hatana, barhana nahi.
+- **`histMonth(H)` — Channel history ka naya section, do honest series:**
+  1. *Readings table (asli time-series):* snapshot rows (`d_subs`/`d_views`/`d_up` pair-deltas) ko month me bucket karta hai — "is mahine ke andar kitna badla, sirf un readings ke beech jo waqai li gayi". Mahina jisme koi reading nahi wo table me **nahi** hota — zero ke barabar nahi, unknown. Views-gained column sirf matched videos (dono readings me naape gaye) ka hai — same rule as pair tables. Ek hi mahine ki readings hon par "Month-over-month change needs readings in at least two months" card — jhoothi series nahi.
+  2. *Upload-month cohorts (cross-section):* `D.items` ko upload month se group karke: videos, aaj ke views, channel ka share %, "vs previous month" (ek cohort vs agli cohort), cumulative + line chart (`hchart`, month ISO strings — `histD` epoch-seconds nahi samajhta, pehle 1970 labels aaye the, fix). Label saaf: "ye us mahine chhapi videos ke AAJ ke views hain — mahine ke dauran ka gain upar wali table hi de sakti".
+  - `histRep` ke `n<2` early-return me ek purani duplicate-render galti bhi theek hui (`…</div>'+h` header block do baar bana raha tha) — ab wahan bhi `histMonth(H)` lagta hai.
+- **Test kiya:** 2730×1536 (user ki exact screen) par `main` 2463px, right gap 11px; history view me "Month by month" section live — Dhruv par 63-month cohort table (2021-01 "first" → 2026-10 "+10.6M", cumulative 5.52B) + chart labels 1/15/2021→10/15/2026; readings table us channel ke liye honest "needs two months" card (saari readings same-day thin — sahi behaviour). `_p42`–`_p48` dobara: sab green (p47 wahi 2 known).
+
+**Principle confirm:** user ne "monthly gain/drop" maanga — jo data de sakta tha (snapshots) wo asli series hai, jo nahi de sakta (ek scan se mahine-baar views) wo cohort ke roop me alag naam aur alag sach ke saath dikhaya. Dono ko ek table me milana jhooth hota.
+
+---
+
+## 20. Key pools (bulk API keys) aur side menu ka hide toggle (this pass, user screenshots ke baad)
+
+User: "maine kaha tha API keys bulk me laga sakta hain — ab mere paas 11 aur accounts ki YouTube ki aur Gemini ki API hai, wo bhi lagani hai"; aur layout par: "screen agay chli gai… side bar wali jagah ko minus kiye baghair poori display ka size udhar laga diya… display left se stretch ka option do ya side wali pills ko hide ka option ho — jb pills dikh rhi ho to utna reduce ho, tb full dikhe".
+
+- **Key pools (server, `_keypool(env_names, path)`):** env var comma/newline-separated, ya file me **ek key prati line**; duplicates judti nahi. `gem_keys()/yt_keys()` pool list hai; `gem_key()/yt_key()` = pool ki current key — har purana caller backward-compatible. `/api/gemkey`/`/api/ytkey` ab `add:true` leta hai — file me add (dedupe) ya poori file overwrite; response me `set` + `n` (pool size) + hint.
+- **Rotation:** `gem_call` aur `yt_get` pool par round-robin — 403/429 (YouTube par quota/rate-limit wording bhi) ya Gemini ka khaali jawab = agli key try, kami ki asli galti dikhti hai; kamyabi par cursor wahin set hota hai. Pool ki saari keys thak jayein to saaf error ("pool ki N keys ki daily limit khatam ho sakti hai"). Runware **jaan-boojh ke single-key** (paid, ek account) — pool sirf free-quota providers (YouTube Data API, Gemini) ke liye.
+- **Sach ki ginti UI tak:** `/api/ai` info me `gemn`, `/api/scans` me `ytn` — chips ab "✓ pool me N keys" kehti hain, N=1 par purana single-key copy. Client ke key boxes ab **textarea** (saari keys paste karo, ek prati line) + "pool me add karo" / "pool hatao"; pool-note sirf N>1 par.
+- **Side menu ka hide toggle (uski asli maang, dono options me se):** nav ke brand row me collapse button → `body.navoff` → nav `display:none` → content poori viewport (2730px par `.app` 2474→2730 verified); collapsed state me topbar me restore (menu) button hamesha. `Ctrl/⌘+B` shortcut + keyboard-sheet line; state `localStorage.cl_nav` me reload ke baad bhi; ≤900px par toggle chhupa (wahan nav pehle se drawer hai). "Pills dikhein to content sidebar ke jitna minus, chhupi ho to poori screen" — exactly yahi hua.
+- **Full-width ka doosra sabak:** AI/Trending/cards ke purane inline `max-width:760–900px` caps hata diye (history table ka 260px cell-chauḍā intentional hai). Ek `overflow-x:clip` belt try ki gayi aur **wapas le li gayi** — usne 1344px par wide channel table ka horizontal scroll tod diya tha (`_p42`/`_p44` ne pakda: header checkbox viewport se bahar, scroll se bhi an-pahunchnayab). Wide tables ka apna horizontal scroll sahi hal hai; 2730 **aur** 2790 par 13 views × (nav on/off) dono me koi element viewport se bahar nahi.
+- **Test:** pool live — do test keys Gemini pool me add → header "✓ pool me 3 keys" + pool note (phir file restore; user ki asli key salamat, `gemn:1`); toggle live (buttons, Ctrl+B, reload-persistence, full-viewport width); `_p42`–`_p48` dobara: sab 0 FAILS siwaye `_p47` ke 2 known data-state FAILS ke. Gates green.
+
+**Sabak:** (1) layout "belt" lagane se pehle medium-width (1344) ka wide-table case lazmi test karna hai — regression suites ne wahi pakda jo 2730-sweep se bach gaya. (2) Free-quota providers par multi-key pool hi uss user ka asli hal hai jiske paas kai accounts hain; paid single-account ko pool me zabardasti nahi kheenchna.
+
+## 21. Global auto-adjust: grid clipping ka asli ilaj, card-size cap, aur YouTube key card ki discoverability (this pass, user screenshots ke baad)
+
+User (v=38 ki do screenshots, 2730×1536, ek me side menu chhupa hua): "youtube ka nhi dikha option"; "size wali problem still remain hai… phir bhi nhi dikh rha last wala border… side bar ko hta kr lia phir bhi nhi dikh rha"; "left se right ho gya, up de down bhi same haal… koi quality nhi hai bekar lg rha"; aur demand: "koi global system… mere dost laptop per khole gay aur idhr bhi sahi kro".
+
+- **Clipping ka asli root-cause (pehli baar pakda gaya):** grid ka *auto-minimum* — grid item ka min-content uske 1fr track se bara ho to tracks container se aage khinch jaate hain aur aakhri card viewport se bahar. User ki screenshot ke pixel-nape (`_m2.py`): 4 cards × 611px + gaps = 2537px, container ~2378px — chautha card ~150px katta hua; usi page ke KPI tiles (jin par pehle se `min-width:0` tha) kabhi nahi katte — yehi saboot hai ke mechanism auto-min hai. Headless Chromium me ye stretch isliye nahi dikha kyunki min-content machine-dependent hai (fonts, browser, zoom — screenshots ka geometry ~110% zoom jaisa baithta hai). Isliye ilaj **tuning nahi, structure** hai.
+- **Global auto-adjust rules (CSS):** `.radar>*{min-width:0}`; `.olm` ab `repeat(3,minmax(0,1fr))` + cells par `min-width:0;overflow-wrap:anywhere`; aur safety ke taur par **har auto-fit/auto-fill gallery aur stat grid ke bachchon** par `min-width:0` (`.grid,.ideas,.sk-grid,.cmpsum,.stdk,.mrow,.v`) — yehi wo pattern hai jo `.kpi div` par kabhi clipping na karne ka saboot rakhta hai. Ab is class ki clipping kisi bhi screen par structural taur par namumkin nahi.
+- **"Quality nahi" ka hal — card cap:** Outlier radar cards ab `minmax(230px,min(430px,100%))` — 430px se koi card bara nahi hota (is se upar thumbnails stretch ho ke dhundhle lagte the), aur `justify-content:space-evenly` se cards poori width par barabar bikharte hain — "ek jaisi line me bikhre hue" nahi, barabar phailte hain. Chhote screens par pehle jaisa hi auto-fit (1366 par 4 columns) — koi cap nahi lagta jab jagah kam hai.
+- **YouTube key option dikha hi nahi kyun:** uska pool UI sirf Competitors page ke *empty state* (Trending card) me tha — scan khula hone par kahin nahi. Ab **AI thumbnail view me Gemini key card ke bilkul neeche "YouTube Data API key" card** — wahi textarea/pool buttons/chips, aur save ke baad view foran re-render (`ytKey` ab `#/ai` par aipg chalata hai). Card saaf likhta hai ke ye key Trending + asli tags/metadata ke liye hai, topic/channel scans bina key ke bhi chalte hain (search-fetch label ke saath).
+- **Test:** gates green; `_p42`–`_p48` — sab 0 FAILS siwaye `_p47` ke 2 known data-state FAILS ke. Live nape 2730 par: tracks exactly 430px ×4, aakhri card ka right 2557 < 2719, `docSW` 2719 (zero overflow); root-zoom 1.1 emulation (uski machine ka case) me bhi zero overflow; side menu chhupi/dikhi dono me fit; **1366×768 par saare 14 views clean** (wide channel table apna document-scroll rakhta hai — belt phir se nahi lagayi). Pool flow live: fake key add → chip "✓ pool me 2 keys" + toast → fake file se hata di; uski asli key salamat (`ytn:1`).
+- **Galti maan lo (agle pass pata chala):** is section ka "root-cause" adhoora tha — auto-min sach tha magar poora nahi. Asar adhoora reh gaya; agla section §22 asli batch khatam karta hai.
+
+## 22. Content column ki ceiling: "right side koi end border nahi" ka asli hal (this pass, user ki gusse wali 5 screenshots ke baad)
+
+User (v=39 ki screenshots — wo nayi build par hi thi, card cap kaam kar raha tha): "abhi bhi right side main koi end border nhi hai data lcd kay bahar ja rha aise dikhta… khuda ka wasta hai… set kr skta hai to kr".
+
+- **Pehla sach — cap kaam kar raha tha:** `_m2.py` pixel-nape me cards 611px se ~430px par aa chuke the. Dusra naya sach: **screenshots chat pipeline ne resize ki thi** — 2730×1536 asal mein 2880×1620 display ka 0.948× scale hai (dono taraf same ratio), aur 2762×1518 asal mein 2560×1400 laptop ka 1.08× scale hai. Uski asli window meri sochi hui 2730 se kaafi chaudi thi.
+- **Doosra sach — meri har headless test isliye paas ho rahi thi:** har normal viewport (1366/2470/2560/2730/2880) par layout fit hota hai — 2880 par bhi last card 200px andar. Par uske dono displays par content phir bhi kinare se bahar tha: matlab uska maximized window screen se chauda hai (mixed-DPI multi-monitor Windows maximize bug — do alag displays, 2880×1620 aur 2560×1400, yehi classic condition hai). CSS `100vw` window jaanta hai, screen nahi — isliye ye case CSS se theek nahi hota, sirf **cap** se safe hota hai.
+- **Fix (global, machine-independent):** `main{max-width:2100px;margin:0 auto}` — jo window 2100px se zyada content ko jagah de, wahan content column ruk kar center ho jata hai; dayein border hamesha screen ke andar rehta hai. Chhoti screens (laptop 1366/1344) par cap chhuta hi nahi — wahan pehle jaisa poori width. `.radar` par ab do line: pehle plain `minmax(230px,1fr)` (jo har browser samjhe), phir `min(430px,100%)` wali cap — purane Chrome mein cap invalid ho to bhi grid 1fr par chale, tute nahi.
+- **Live nape (nayi build, `?v=40`):** 2880×1620 par main ka right 2613 (267px andar), last radar card 2523 (357px andar), KPI last tile 2579 — `docSW` 2869, zero overflow; 2560×1400 par main right 2453 (107px andar), cards 197px andar; 1366×768 par cap inactive, wide table ka document-scroll waisa hi. `_p42`–`_p48` sab green (siwaye `_p47` ke 2 known data-state FAILS).
+- **Sabak:** (1) Screenshot ka pixel-nape tab tak kaam nahi jab tak pata na ho ke chat ne image resize ki ya nahi — ratio check (`w/h` ka cross-match) pehle karo. (2) "Meri har width par fit hai" ka matlab sirf itna hai ke CSS viewport fit hai; user ka window CSS viewport se bara ho sakta hai — aise cases mein defensive ceiling lagao, exact width dhoondne ke peeche mat bhago. (3) Adhoori diagnosis ko "root-cause" likhna ghalti thi — §21 ka auto-min sach tha, poora nahi; agla pass ye fix karta hai.
+
+---
+*This brief describes what is actually implemented in `clicklab.py` as of this pass: the Obsidian Kinetic design system (superseding "Aurora Ink"), the Scan history audit trail with instant rollback, the Home dashboard, the Outlier radar, bulk-select in the Studio table, the Testing hub, the five Tulna behtariyan of the earlier sections, the full-listing measurement default, the six external-API groups with their honest source labels, the guided Topic Funnel with keyword finder, transcription, style classifier/jeet and in-scan competitor ranking, the count-guarantee top-up, winners filter + KPI, OCR screen-text transcription, bulk API queues with provider-fallback chains, the model-verdict card and the no-model formula card, and the final section's fluid full-width layout, channel-creation-date with mandatory source labels, full upload times where the API gives them, upload-routine honesty, and the Competitor bank, plus the multi-key API pools with automatic rotation and the hide/show side menu, and the global grid-fit guard (`min-width:0` on every grid's children), the capped and evenly spread Outlier radar cards, the centered 2100px content-column ceiling for very wide windows, and the YouTube key pool card beside the Gemini one in the AI thumbnail view - all button-driven, no automatic searches. Where the document mentions a component, that component exists and is in use on the named screens.*

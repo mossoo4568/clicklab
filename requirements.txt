@@ -1,0 +1,16 @@
+# ClickLab ke liye zaroori / behtar packages.
+# Zaroori:
+pillow
+numpy
+yt-dlp
+# Face detection (YuNet) + composition + contrast mask — iske bagair chehre/composition ke
+# numbers khali rahenge (tool Haar par girta hai aur ye khud likhta hai ke kaunsa engine chala):
+opencv-python-headless>=4.5.4
+# OCR (PP-OCRv4). Na hua to Tesseract par girta hai — par Tesseract ne ek thumbnail par
+# "How to study GRAMMAR" ko "RA"+"ry" padha tha, isliye ye recommended nahi, lagana chahiye:
+rapidocr-onnxruntime
+# TF-IDF semantic match + CTR par weight calibration. Na hua to ye do number khali rahenge.
+scikit-learn
+# Sirf "Bahar ki garmahat" card ka Google Trends hisala. Na lage to wo card saaf
+# "install karo" bolta hai — baaki tool par koi asar nahi. (Google ka unofficial data.)
+pytrends

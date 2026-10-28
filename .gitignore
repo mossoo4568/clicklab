@@ -1,0 +1,14 @@
+# API keys — har user ki apni hoti hain, repo me nahi jaatin
+*_key.txt
+cookies.txt
+
+# user ki history/runtime data (scans, OCR, transcripts, banaye thumbnails)
+thumb_output/
+reports/
+models/
+ocrmode.txt
+
+# kaam ke beech ka kachra aur bane-banaye zip
+_*
+*.zip
+__pycache__/

@@ -1,0 +1,28 @@
+ClickLab — personal-use license (ikhtisar, kanooni zabaan nahi)
+
+Yeh tool aur iska code sirf aapki APNI personal use ke liye hai.
+Aap is se jo chahein bana sakte hain (scans, reports, thumbnails) —
+magar tool ki copy (code, zip, repo ka content) dobara kisi aur ko
+mat dijiye, na aage share kijiye, na kisi aur repo/site par daaliye.
+
+Agar kisi dost ko chahiye, to usse keh ke aap owner se kahein —
+owner usse apne haath se access dega (private GitHub invite ya zip).
+
+Yeh repo private hai: owner kabhi bhi aapka access kaat sakta hai.
+Is line ke baad bhi jo copy aap pehle download kar chuke ho, us par
+technically koi qaboo nahi — is liye ye shart aapke ehteraam par hai,
+bharose par, na ke kisi lock par.
+
+ClickLab — personal-use license (summary, not legal language)
+
+The tool and its code are for YOUR OWN personal use only. You may
+produce whatever you like with it (scans, reports, thumbnails), but
+please do not pass the tool itself (code, zip, repo contents) on to
+anyone else, and do not publish it to another repo or site. If a
+friend wants it, ask the owner — the owner will give them access
+directly (private GitHub invite or zip).
+
+This repository is private: the owner can revoke your access at any
+time. Copies you have already downloaded cannot technically be taken
+back — so this condition rests on your courtesy and trust, not on a
+technical lock.
