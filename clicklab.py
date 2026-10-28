@@ -6007,6 +6007,41 @@ def extend_chan(sid, k=20, kind="long", ids=None):
     return {"job": jid, "id": sid, "n": len(todo), "eta": meas_eta(len(todo))}
 
 
+def ch_new(sid):
+    """Nayi videos (channel scan ko taaza karo): listing dobara YouTube se lo aur un
+    me se SIRF wo videos jo is scan ki purani listing me thi hi nahi — yani scan ke
+    baad chhapi hain — un par wahi poora naap chalao. Jo pehle se scan me hain
+    (naapi hui ya sirf gini) wo chhedi nahi jaayengi — user ka data waisa ka waisa.
+    Purani listing scan file ke walk me mehfooz hoti hai; diff usi se hota hai.
+    Naya listing snapshot file me likha jaata hai, is liye counts (header wale) bhi
+    taaza ho jaate hain. Jab scan purana ho aur walk mehfooz na ho to naapi-gayi
+    videos hi baseline banti hain — jo unme se chhooti hui thin wo bhi jud jaayengi."""
+    sid = re.sub(r"[^0-9a-f]", "", sid or "")
+    f = SCN_DIR / (sid + ".json")
+    if not f.exists():
+        return {"err": "wo scan file nahi mili"}
+    d = json.loads(f.read_text(encoding="utf-8"))
+    if d.get("kind") != "channel":
+        return {"err": "ye channel scan nahi hai — nayi videos ka kaam sirf channel scans ke liye hai"}
+    old = set(v.get("id") for arr in ("v", "s") for v in ((d.get("walk") or {}).get(arr) or []) if v.get("id"))
+    had_walk = bool(old)
+    wk = ensure_walk(sid, force=True)
+    if not wk:
+        return {"err": "YouTube se listing dobara nahi mil saki — thori der baad phir try karein"}
+    have = set(i.get("id") for i in (d.get("items") or []) if i.get("id"))
+    base = old if had_walk else have
+    fresh = [v["id"] for arr in ("v", "s") for v in (wk.get(arr) or [])
+             if v.get("id") and v["id"] not in base and v["id"] not in have]
+    if not fresh:
+        return {"ok": True, "n": 0,
+                "msg": ("koi nayi video nahi mili — listing abhi taaza le kar dekhi, wahi %d long + %d short hain"
+                        % (len(wk["v"]), len(wk["s"])))}
+    r = extend_chan(sid, k=len(fresh), ids=fresh)
+    if isinstance(r, dict) and not r.get("err"):
+        r["new_n"] = len(fresh)
+    return r
+
+
 def chan_recalc(d):
     """Scan file ka har hissa items se dobara nikalta hai — is liye naap ke beech me
     bhi file apne aap se milti hui rehti hai (adhura record kabhi nahi dikhta)."""
@@ -8523,6 +8558,9 @@ class H(BaseHTTPRequestHandler):
                                         "cap": wk.get("cap") or CH_WALK, "got": wk.get("got") or "",
                                         "n_long": len(wk["v"]), "n_short": len(wk["s"]),
                                         "measured": have})
+            if u.path == "/api/chnew":
+                # channel scan ke baad jo videos chhapi hain — sirf unhi par naap
+                return self._send(200, ch_new(q.get("id") or ""))
             if u.path == "/api/tback":
                 return self._send(200, ts_backfill(q.get("id", "")))
             if u.path == "/api/join":
@@ -9651,7 +9689,8 @@ function topbar(){
  const s=SCANS.find(x=>x.id===cur);
  $("#top").innerHTML=(document.body.classList.contains("navoff")?'<button class="iconbtn gh" id="navo" aria-label="Side menu dikhao" title="Side menu dikhao (Ctrl+B)">'+ico("menu",18)+"</button>":"")+'<button class="iconbtn gh" id="bk" aria-label="Go back" title="Go back (the browser Back key works too)">'+ico("back",18)+'</button>'+
   '<span class="ttl">'+(s?esc(s.kind==="channel"?(s.ch||{}).name||s.topic:s.topic)+' <span class="sep">·</span> <span style="color:var(--mut);font-weight:400">'+esc(vlbl(s))+"</span>":esc(vlbl(s)))+'</span>'+
-  (s?(s.kind==="channel"?'<span class="chip" title="the listing is counted up to 400 videos; the measurement covers only the videos that were measured, the rest are counted only">channel · '+capn((s.ch||{}).tot_videos,400)+' videos · '+capn((s.ch||{}).tot_shorts,400)+' shorts · '+s.kept+' measured</span>'
+  (s?(s.kind==="channel"?'<span class="chip" title="the listing is counted up to 400 videos; the measurement covers only the videos that were measured, the rest are counted only">channel · '+capn((s.ch||{}).tot_videos,400)+' videos · '+capn((s.ch||{}).tot_shorts,400)+' shorts · '+s.kept+' measured</span>'+
+     '<button class="sm" onclick="chNew()" title="Scan ke baad jo nayi videos chhapi hain wo dhoondo — sirf unhi par naap chalega; jo pehle se scan me hai wo chheda nahi jayega">'+ico("down",13)+'Nayi videos laao</button>'
     :'<span class="chip" title="'+s.n+' were requested; filters kept '+s.kept+' (shorts removed, no more than one per channel, duplicates removed)">'+s.kept+' videos</span>'):"")+'<span class="sp"></span>'+
   '<button class="sm gh" onclick="go(\'act\')" title="Scan history — open or restore any past scan" aria-label="Scan history">'+ico("clock",15)+'History</button>'+
    '<button class="sm gh" onclick="palette()" title="Go anywhere from one box" aria-label="Search where to go">'+ico("search",15)+'<kbd>Ctrl K</kbd></button>'+
@@ -11989,12 +12028,10 @@ async function walkGet(sid,force){
  if(!r||r.err){WALK={id:sid,rows:[],err:(r&&r.err)||""};return WALK}
  WALK={id:sid,rows:r.rows||[],cap:r.cap||400,got:r.got||"",terr:r.terr||"",n_long:r.n_long||0,n_short:r.n_short||0};
  return WALK}
-async function chMore(n,ids){
- // Jo videos abhi sirf gini gayi hain un par wahi naap chalao (channel scan wala
- // engine), phir poora view taaza — counts, table aur dashboard ek hi sach par rahein.
- if(!cur)return toast("Open a channel first");
- let r;try{r=await j("/api/chmore?id="+cur+"&n="+n+(ids?("&ids="+encodeURIComponent(ids)):""))}catch(e){return failToast(e,"starting the measurement")}
- if(!r||r.err)return toast((r&&r.err)||"the measurement did not start");
+async function chxRun(r){
+ // Chalta naap job live follow karta hai: progress bar, aur jo video naap ho gayi
+ // wo foran table me. chMore (baaki bacha naap) aur chNew (nayi videos) dono isi ko
+ // chalate hain — dohrav nahi.
  CHX={id:cur,job:r.job};CHXP={done:0,total:(r.n||0)*2,cur:"starting…",eta:r.eta||null};
  stRender();let last=-1;
  for(let k=0;k<3000;k++){
@@ -12012,7 +12049,27 @@ async function chMore(n,ids){
   if(p.state==="done")break;
   if(p.state==="error"){CHX=null;CHXP={};toast("The measurement stopped: "+(p.error||"?"));await boot();return}}
  CHX=null;CHXP={};D=null;WALK=null;await boot();
- toast("poora channel naap liya — ab har video ka data table me hai")}
+ toast("naap mukammal — naya natija table me hai")}
+async function chMore(n,ids){
+ // Jo videos abhi sirf gini gayi hain un par wahi naap chalao (channel scan wala
+ // engine), phir poora view taaza — counts, table aur dashboard ek hi sach par rahein.
+ if(!cur)return toast("Open a channel first");
+ let r;try{r=await j("/api/chmore?id="+cur+"&n="+n+(ids?("&ids="+encodeURIComponent(ids)):""))}catch(e){return failToast(e,"starting the measurement")}
+ if(!r||r.err)return toast((r&&r.err)||"the measurement did not start");
+ await chxRun(r)}
+async function chNew(){
+ // "Nayi videos laao": server listing dobara leta hai aur SIRF unhi videos par naap
+ // chalata hai jo is scan ke waqt maujood hi nahi thin (scan ke baad chhapi hain).
+ // Jo pehle se scan me hai wo chheda nahi jaata — purana data waisa ka waisa rehta hai.
+ if(!cur)return toast("pehle koi channel kholo");
+ if(CHX&&CHX.id===cur)return toast("naap ka kaam pehle se chal raha hai — thora rukein");
+ let r;try{r=await j("/api/chnew?id="+cur)}catch(e){return failToast(e,"listing dobara lene me")}
+ if(!r)return;
+ if(r.err)return toast(r.err);
+ WALK=null;
+ if(!r.n){await boot();return toast(r.msg||"koi nayi video nahi mili")}
+ toast(r.n+" nayi video scan ke baad chhapi hai — in par naap shuru");
+ await chxRun(r)}
 function chOne(id){chMore(1,id)}
 function stAct(){
  // Sirf-gini-gayi videos par naap chalane ka button. Wahi engine chalta hai jo channel
