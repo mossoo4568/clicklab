@@ -6036,6 +6036,19 @@ def _lang_guess(txt):
     return None
 
 
+_Q_STOP = {"the", "a", "an", "of", "for", "and", "or", "in", "on", "to", "with",
+           "how", "what", "why", "best", "top", "new", "shorts", "video", "videos",
+           "channel", "official", "full", "hd", "movie", "movies", "song", "songs"}
+
+
+def _q_tokens(q):
+    """Topic ke maayne wale lafz — strict dhoondh ke liye. Chhote lafz, saal jaise
+    numbers aur betaar stop-lafz bahar; baaki lafz channel ke naam/handle/description
+    ya uske titles me milne chahiye, warna channel dhoondh se bahar."""
+    return [w for w in re.findall(r"[a-z0-9\u0900-\u097f\u0600-\u06ff]+", (q or "").lower())
+            if len(w) >= 3 and not w.isdigit() and w not in _Q_STOP]
+
+
 def _radar_rows(q, n, jid=None):
     """Niche Finder ka poora kaam: candidate channels (YouTube ka Channel filter) lo, phir
     HAMESHA ASLI GIN se mazaar naapo — channel ki umar aur latest 15 uploads ke views/
@@ -6048,7 +6061,8 @@ def _radar_rows(q, n, jid=None):
     if jid:
         JOBS[jid]["total"] = len(cands)
     rows = []
-    meta = {"lang_skipped": 0, "langs": []}
+    meta = {"lang_skipped": 0, "langs": [], "strict_skipped": 0}
+    toks = _q_tokens(q)
     now = dt.datetime.now(dt.timezone.utc)
     for i, c in enumerate(cands):
         if jid:
@@ -6056,6 +6070,14 @@ def _radar_rows(q, n, jid=None):
             JOBS[jid]["current"] = ("naap: " + (c.get("name") or ""))[:44]
         rs = _rss_recent(c["id"]) or {"vids": [], "born": ""}
         vids = rs["vids"]
+        if toks:
+            # Strict dhoondh: topic ka koi bhi maayne wala lafz naam/handle/description
+            # ya videos ke titles me na mile to channel be-taaluq hai — bahar.
+            blob = ((c.get("name") or "") + " " + (c.get("handle") or "") + " " +
+                    (c.get("desc") or "") + " " + " ".join(t for _, _, t in vids)).lower()
+            if not any(w in blob for w in toks):
+                meta["strict_skipped"] += 1
+                continue
         lg = _lang_guess((c.get("name") or "") + " " + (c.get("desc") or "") + " " +
                          " ".join(t for _, _, t in vids[:10]))
         if lg:
@@ -6100,8 +6122,8 @@ def _radar_rows(q, n, jid=None):
         vyr = None
         if age_d and n_v:
             vyr = round(n_v / (max(age_d, 1) / 365.25), 1)   # videos per saal (asli gin se)
-            if age_d <= 545 and n_v <= 100 and (med >= 100000 or subs >= 100000):
-                flag = "boom"          # hal hi ka channel: kam videos, subs/views mein uchaal
+            if age_d <= 180 and n_v <= 100 and (med >= 100000 or subs >= 100000):
+                flag = "boom"          # 6 mahine se kam umar: kam videos, subs/views mein uchaal
             elif age_d >= 1460 and vyr <= 12 and (subs >= 300000 or med >= 100000):
                 flag = "chhotabada"    # saalon purana magar videos hi kam — phir bhi number uncha
         rows.append({"id": c["id"], "name": c["name"], "handle": c.get("handle") or "",
@@ -6132,11 +6154,13 @@ def _niche_hist(hkey, q, n, rows, meta, backfill=False):
             return
         ts = dt.datetime.now(dt.timezone.utc).isoformat()
         if backfill:
-            try:
-                mt = (CH_DIR / ("rad_" + hkey[:16] + ".json")).stat().st_mtime
-                ts = dt.datetime.fromtimestamp(mt, dt.timezone.utc).isoformat()
-            except Exception:
-                pass
+            for pfx in ("rad2_", "rad_"):   # nayi ya purani cache-file — asli chalne ki taarikh wahi
+                try:
+                    mt = (CH_DIR / (pfx + hkey[:16] + ".json")).stat().st_mtime
+                    ts = dt.datetime.fromtimestamp(mt, dt.timezone.utc).isoformat()
+                    break
+                except Exception:
+                    pass
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps({"id": hkey, "kind": "niche", "topic": q, "n": n,
                                  "ts": ts, "rows": rows, "meta": meta}, ensure_ascii=False),
@@ -6155,7 +6179,9 @@ def radar(q, n=18):
         return {"err": "pehle niche/topic likho"}
     n = max(6, min(50, int(n or 18)))
     hkey = hashlib.md5((q + "|" + str(n)).encode()).hexdigest()   # history-record id (pure hex)
-    key = "rad_" + hkey[:16]
+    # rad2_: strict dhoondh shuru hone par cache-key badli — strict se pehle ka purana
+    # jawab (be-taaluq channels wala) abhi bhi serve na ho.
+    key = "rad2_" + hkey[:16]
     c = _cget(key)
     if c is not None:
         if isinstance(c, dict):
@@ -11012,10 +11038,11 @@ function cbFormAt(i){if(CBF!==i||!D)return "";const it=D.items[i];
  '<div class="bar" style="margin-top:9px"><button class="go" onclick="cbSave('+i+')">'+ico("plus",14)+(had?"bank me update karo":"Competitor banao — bank me save karo")+'</button>'+
  '<button class="sm" onclick="CBF=-1;zoom('+i+')">band karo</button></div>'+
  (st?'<div class="sub">Style ka box tool ke classifier ke andaze ("'+esc(STYL[st]||st)+'") se bhar diya hai — galat ho to badal dein. Aapka chuna hua aapki raaye hai, tool ka naap nahi.</div>':
-  '<div class="sub">Is video par tool ne style pehchana nahi — khud chun lein. Bank me jo likha hai wo aapki raaye hai; numbers us din ke scan se.</div>')+'</div>'}
+  '<div class="sub">Is video par tool ne style pehchana nahi — box khali chhorne par bhi save ho jayega, magar record me saaf likha hoga ke style pehchana nahi gaya; baad me zoom me kabhi bhi chun sakte hain. Bank me jo chuna gaya wo aapki raaye hai; numbers us din ke scan se.</div>')+'</div>'}
 async function cbSave(i){const it=D.items[i];
- const st=(document.getElementById("cbs")||{}).value||"",ni=((document.getElementById("cbn")||{}).value||"").trim(),no=((document.getElementById("cbt")||{}).value||"").trim();
- if(!st)return toast("style chuno — bank ka maayne hi style/niche ke saath hai","warn");
+ let st=(document.getElementById("cbs")||{}).value||"";
+ if(!st)st=(D.sty||{})[it.id]||"";   // khali ho to classifier ka andaza chala do — bank-view me source saaf likha hai, zoom me kabhi bhi theek ho jata hai
+ const ni=((document.getElementById("cbn")||{}).value||"").trim(),no=((document.getElementById("cbt")||{}).value||"").trim();
  let r;try{r=await jp("/api/cmpbsave",{id:cur,vid:it.id,style:st,nic:ni,note:no})}catch(e){return failToast(e,"bank save")}
  if(!r||r.err)return toast((r&&r.err)||"bank me save nahi hua");
  await cbGet(true);CBF=-1;toast("competitor bank me save ho gaya — kul "+r.n+" record");zoom(i)}
@@ -12167,16 +12194,20 @@ async function rdGo(){
  if(!r)return;if(r.err)return toast(r.err);
  if(r.rows){RD={q:q,rows:r.rows,meta:r.meta||{},fsel:fs,cached:true};RDJ=null;refScans();rdView();return}
  RDJ={job:r.job,q:q,total:r.total||0,done:0,cur:"channels dhoondhe ja rahe hain…"};rdView();
+ let bad=0;
  for(let k=0;k<2400;k++){
   await new Promise(z=>setTimeout(z,1500));
-  let p;try{p=await j("/api/progress?id="+r.job)}catch(e){break}
+  let p;try{p=await j("/api/progress?id="+r.job)}catch(e){bad++;if(bad<10)continue;break}
   if(!p||p.state==="gone")break;
   if(p.state==="done"){RD={q:q,rows:p.rows||[],meta:p.meta||{},fsel:fs,cached:false};RDJ=null;refScans();rdView();
    toast((p.rows||[]).length?"radar mukammal — dekhne layak channels upar hain":"is niche me is maap (10 hazar+ median views) ka koi channel nahi mila");return}
   if(p.state==="error"){RDJ=null;rdView();toast("radar atka gaya: "+(p.error||"?"));return}
   RDJ={job:r.job,q:q,total:p.total||0,done:p.done||0,cur:p.current||"…"};
   const el=$("#rdp");if(el)el.innerHTML=rdProgIn()}
- RDJ=null;rdView();toast("radar ka jawab wapas nahi aaya — phir try karein")}
+ RDJ=null;
+ let r2;try{r2=await j("/api/radar?q="+encodeURIComponent(q)+"&n="+nn)}catch(e){}
+ if(r2&&r2.rows){RD={q:q,rows:r2.rows,meta:r2.meta||{},fsel:fs,cached:true};RDJ=null;refScans();rdView();toast("job ka signal nahi mila, magar scan pura ho chuka tha — mehfooz jawab khol liye","ok");return}
+ rdView();toast("radar ka jawab wapas nahi aaya — phir try karein")}
 function rdProgIn(){const pc=Math.round(100*(RDJ.done||0)/Math.max(1,RDJ.total||1));
  return '<div class="sub"><b>'+esc(RDJ.cur||"…")+'</b> · '+(RDJ.done||0)+'/'+(RDJ.total||0)+' channels janche gaye</div>'+
   '<div class="pbar"><i style="width:'+pc+'%"></i></div>'}
@@ -12191,7 +12222,7 @@ function rdAge(d){if(d==null)return '<span class="sub">—</span>';
 function rdBadges(c){const b=[];
  if(c.flag==="boom")b.push('<span class="chip" style="border-color:var(--grn)"><b>naya channel boom</b></span>');
  else if(c.flag==="chhotabada")b.push('<span class="chip" style="border-color:var(--acc)"><b>chhota-but-bada</b></span>');
- if(c.age_d!=null&&c.age_d<365)b.push('<span class="chip" style="border-color:var(--acc)">naya channel</span>');
+ if(c.age_d!=null&&c.age_d<180)b.push('<span class="chip" style="border-color:var(--acc)">naya channel</span>');
  if(c.n_v&&c.n_v<150&&c.med_v>=100000)b.push('<span class="chip" style="border-color:var(--grn)">kam videos, lakhon views</span>');
  if(c.ratio!=null&&c.ratio>=2)b.push('<span class="chip" style="border-color:var(--grn)">reach ×2+</span>');
  return b.length?'<div style="margin-top:3px">'+b.join(" ")+'</div>':""}
@@ -12208,8 +12239,9 @@ function radarTable(){
   (RD.hist?'<div class="sub">Ye <b>'+new Date(RD.hist).toLocaleString()+'</b> ka mehfooz record hai (Scan history se khola gaya) — ye numbers usi din ke gine hue hain, kuch dobara nahi naapa. Taaza dhoondh ke liye upar "Dhoondo" dobara chalayein.</div>':"")+
    (((RD.meta||{}).checked&&(RD.meta||{}).checked!==all.length)?'<div class="sub"><b>'+RD.meta.checked+' channels check kiye gaye</b> — list me sirf wo '+all.length+' aaye jinhone <b>3+ videos, 10 hazar+ median views aur zubaan</b> ki shart poori ki; baaki check hone ke baad bhi bahar rahe (ye ginti chhupayi nahi gayi). Zyada chahiye to channels ki ginti badha kar dobara dhoondein.</div>':"")+
   (RD.cached?'<div class="sub">Ye jawab 24 ghante ke cache se hai — bilkul naya dhoondhne ke liye button dobara chalayein.</div>':"")+
+   ((RD.meta||{}).strict_skipped?'<div class="sub"><b>Strict match:</b> '+RD.meta.strict_skipped+' channel dhoondh se bahar rakhe gaye kyunke topic ka koi bhi maayne wala lafz unke naam/handle/description ya videos ke titles me nahi mila — dhoondh strict hai, sirf topic-se-related channels ginay gaye.</div>':"")+
    ((RD.meta||{}).lang_skipped?'<div class="sub"><b>Zubaan filter:</b> '+RD.meta.lang_skipped+' channel dhoondh se bahar rakh gaye kyunke naam/title se unki zubaan low-RPM lagi'+((RD.meta.langs||[]).length?' ('+esc((RD.meta.langs||[]).join(", "))+')':'')+'. Pehchaan <b>andaze</b> se hoti hai (script + aam lafz) — shak ho to channel bahar nahi gaya. English/high-RPM zubaanein rakhi gayi hain, kyunki is tool ki maap unhi ke hisaab se hain.</div>':"")+
-  '<div class="sub"><b>Kaise gina:</b> <b>Channel ki umar</b> = RSS feed me YouTube ke apne diye hue channel-banane-din se (channel page par joined date nahi hota, ye feed me milta hai). Har channel ke <b>latest 15 uploads</b> ke views aur upload ki taarikh YouTube ke apne <b>RSS feed</b> se li — asli gin, koi model ka andaza nahi. <b>Median views</b> = in 15 uploads ke views ka beech ka number (average se zyada pakka — ek viral video poora hisaab nahi bigaadta). <b>Uploads</b> = channel ki poori listing ki gin (400 tak; "+400" ka matlab us se zyada). <b>Uploads/30din</b> RSS ki exact upload-taarikh se. <b>Reach</b> = median views ÷ subscribers: jitna uncha, utni video channel ki apni size se zyada pahunch rahi hai — <b>format jal raha hai, size nahi</b>. <b>Nishaniyan</b> (naya channel / kam videos par lakhon views / reach ×2+) inhi asli ginon se lagti hain, model ka koi andaza nahi. <b>Condition flags</b> (upar dropdown se filter): <b>naya channel boom</b> = umar 18 mahine se kam, videos 100 se kam, aur median views ya subscribers mein se koi ek 1 lakh se upar. <b>chhota-but-bada</b> = umar 4 saal se zyada, videos per saal 12 se kam (umar ke hisaab se kam hi chalte rahe), aur subscribers 3 lakh+ ya median views 1 lakh+. Ye thresholds jaan-boojh kar uncha rakha hai — "ubbleivable" ka matlab hi yahi hai; poore hisaab table me dikhte hain, flag sirf nishani hai. Sirf 10 hazar+ median views wale list me aate hain; baaki chhod diye jaate hain.</div>'+
+  '<div class="sub"><b>Kaise gina:</b> <b>Channel ki umar</b> = RSS feed me YouTube ke apne diye hue channel-banane-din se (channel page par joined date nahi hota, ye feed me milta hai). Har channel ke <b>latest 15 uploads</b> ke views aur upload ki taarikh YouTube ke apne <b>RSS feed</b> se li — asli gin, koi model ka andaza nahi. <b>Median views</b> = in 15 uploads ke views ka beech ka number (average se zyada pakka — ek viral video poora hisaab nahi bigaadta). <b>Uploads</b> = channel ki poori listing ki gin (400 tak; "+400" ka matlab us se zyada). <b>Uploads/30din</b> RSS ki exact upload-taarikh se. <b>Reach</b> = median views ÷ subscribers: jitna uncha, utni video channel ki apni size se zyada pahunch rahi hai — <b>format jal raha hai, size nahi</b>. <b>Nishaniyan</b> (naya channel / kam videos par lakhon views / reach ×2+) inhi asli ginon se lagti hain, model ka koi andaza nahi. <b>Condition flags</b> (upar dropdown se filter): <b>naya channel boom</b> = umar 6 mahine se kam, videos 100 se kam, aur median views ya subscribers mein se koi ek 1 lakh se upar. <b>chhota-but-bada</b> = umar 4 saal se zyada, videos per saal 12 se kam (umar ke hisaab se kam hi chalte rahe), aur subscribers 3 lakh+ ya median views 1 lakh+. Ye thresholds jaan-boojh kar uncha rakha hai — "ubbleivable" ka matlab hi yahi hai; poore hisaab table me dikhte hain, flag sirf nishani hai. Sirf 10 hazar+ median views wale list me aate hain; baaki chhod diye jaate hain. <b>Strict match:</b> topic ke maayne wale lafz (the/for jaise betaar lafz chhod kar) channel ke naam/handle/description ya uske latest titles me na milen to channel be-taaluq hai — dhoondh se bahar; ginti sirf topic-se-related channels ki hoti hai.</div>'+
   '<table><thead><tr><th scope="col">Channel</th><th scope="col" class="num">Channel ki umar</th><th scope="col" class="num">Subscribers</th><th scope="col" class="num">Uploads</th><th scope="col" class="num">Uploads/30din</th><th scope="col" class="num">Median views</th><th scope="col" class="num">Reach</th><th scope="col"></th></tr></thead><tbody>'+
   rows.map(c=>'<tr><td><div class="cwr">'+(c.thumb?'<img class="cav" loading="lazy" alt="" src="'+esc(c.thumb)+'" onerror="this.style.visibility=\'hidden\'">':'<span class="cav" style="background:var(--card2)"></span>')+
     '<div><b>'+esc(c.name)+'</b>'+(c.ver?" "+ico("check",13):"")+(c.handle?' <span class="sub">'+esc(c.handle)+'</span>':"")+rdBadges(c)+'</div></div></td>'+
@@ -12234,7 +12266,7 @@ async function nichev(){const _t=RTN;
    '<option value="boom"'+(fs==="boom"?" selected":"")+'>Shart 1 — naya channel boom</option>'+
    '<option value="purana"'+(fs==="purana"?" selected":"")+'>Shart 2 — chhota-but-bada (purana, kam videos)</option></select>'})()+
   '<button class="go" onclick="rdGo()">'+ico("target",15)+'Dhoondo — aur naap lo</button></div>'+
-  '<div class="sub">Criteria (sab asli gin — koi score ghad-tora nahi): <b>channel ki umar</b>, <b>videos ki ginti</b>, <b>subscribers</b>, <b>median views</b>, aur <b>reach</b> (views ÷ subscribers) — in se rank hoti hai aur <b>nishaniyan</b> lagti hain. <b>Do condition filters (dropdown)</b> — <b>Shart 1: naya channel boom</b> = channel <b>18 mahine se naya</b> (saalon purana nahi), <b>videos 100 se kam</b>, aur subscribers ya median views <b>koi ek 1 lakh+</b> — matlab abhi bana aur abhi uchal raha hai. <b>Shart 2: chhota-but-bada</b> = channel <b>4 saal se purana</b> magar <b>saal ke 12 se kam videos</b> (umar ke hisaab se kaam kam), phir bhi subscribers <b>3 lakh+</b> ya median views <b>1 lakh+</b> — umar zyada, kaam kam, number ubbleivable. <b>Zubaan filter:</b> low-RPM zubaano (Hindi/Urdu/Arabic/Spanish waghera) ke channels dhoondh se bahar — pehchaan title/naam ke script se hoti hai, <b>andaza</b>; English/high-RPM zubaanein rehti hain. Result ke rows bilkul channel-search jaise hain (DP + naam + @handle) — <b>"kholo — poora naap"</b> us channel ka poora scan kholta hai: thumbnails, OCR, deep analysis, sab features.</div></div>';
+  '<div class="sub">Criteria (sab asli gin — koi score ghad-tora nahi): <b>channel ki umar</b>, <b>videos ki ginti</b>, <b>subscribers</b>, <b>median views</b>, aur <b>reach</b> (views ÷ subscribers) — in se rank hoti hai aur <b>nishaniyan</b> lagti hain. <b>Do condition filters (dropdown)</b> — <b>Shart 1: naya channel boom</b> = channel <b>6 mahine se naya</b> (saalon purana nahi), <b>videos 100 se kam</b>, aur subscribers ya median views <b>koi ek 1 lakh+</b> — matlab abhi bana aur abhi uchal raha hai. <b>Shart 2: chhota-but-bada</b> = channel <b>4 saal se purana</b> magar <b>saal ke 12 se kam videos</b> (umar ke hisaab se kaam kam), phir bhi subscribers <b>3 lakh+</b> ya median views <b>1 lakh+</b> — umar zyada, kaam kam, number ubbleivable. <b>Zubaan filter:</b> low-RPM zubaano (Hindi/Urdu/Arabic/Spanish waghera) ke channels dhoondh se bahar — pehchaan title/naam ke script se hoti hai, <b>andaza</b>; English/high-RPM zubaanein rehti hain. <b>Strict match:</b> topic ka koi maayne wala lafz channel ke naam/handle/description ya uske titles me na mile to channel be-taaluq samajh kar dhoondh se bahar — sirf related channels ginay jaate hain. Result ke rows bilkul channel-search jaise hain (DP + naam + @handle) — <b>"kholo — poora naap"</b> us channel ka poora scan kholta hai: thumbnails, OCR, deep analysis, sab features.</div></div>';
  if(RDJ)h+=radarProg();
  if(RD)h+=radarTable();
  $("#main").innerHTML=h}
