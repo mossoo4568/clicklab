@@ -259,12 +259,29 @@ nahi) — kam video wali row par "kam bharosa" label ke saath.
   Purane scans par waqt ka naqsha **time backfill** button se bhar jata hai
   (1 API unit, ek hi baar per channel). CSV me `published_time` column (UTC).
 - **Competitor bank:** kisi bhi video card ya uske poore analysis me **Competitor
-  banao** — style (classifier ka andaza prefill hota hai, aapka chuna final
-  hota hai) aur niche likh kar save. Sidebar me naya **Competitor bank** view:
+  banao** — ek click me save. Style ka box classifier ka andaza prefill
+  karta hai (aapka chuna final hota hai); box khali bhi chhoda ja sakta
+  hai — record phir bhi save hota hai aur bank me honest note dikhta hai
+  ("classifier pehchaan nahi paaya — zoom me khud chun lein"). Niche likh kar save. Sidebar me naya **Competitor bank** view:
   har record us din ke scan ka snapshot hai (numbers "save ke waqt ke" likhe
   hain), channel ki creation date aur aakhri upload ke saath; "poora analysis"
   seedha us scan ka wo video khol deta hai. Bank file `thumb_output/cmpbank.json`
   hai — aapka data hai, share zip me nahi jata.
+- **Niche Finder:** sidebar ka **Niche Finder** tab — topic se channels ki
+  dhoondh, har channel ki **asli gin** (RSS se channel ki umar aur latest
+  uploads ke views, listing se kul uploads aur median views) aur do
+  condition filters (*naya channel* = 6 mahine se naya; *chhota magar
+  bara*). Iske liye **koi extra API key lazmi nahi** — wahi raaste hain
+  jo Channel analytics use karta hai (YouTube key ho to candidates aur
+  behtar). Shartein aur gin screen par likhi hoti hain: kitne candidates
+  **check** kiye vs kitne **qualify** hue, aur kitne be-taaluq channels
+  strict filter ne bahar rakha. Har dhoondh `thumb_output/scans/` me
+  mehfooz record ban jaati hai jo top bar ke **Scan history** button se
+  dobara khulta hai — numbers dobara naape nahi jaate, wahi purane
+  number rekonstruekte hain.
+- **Scan history:** top bar ka 🕘 button — har topic/channel/Niche scan ka
+  immutable record apne machine par. Doosre laptop par data le jaana ho to
+  `thumb_output\` copy karo; `git pull` is folder ko chhuta hi nahi.
 
 ## API keys ka pool (bulk) aur side menu ka hide — latest pass
 

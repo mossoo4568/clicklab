@@ -8430,7 +8430,7 @@ def share_zip():
         n = f.name
         if f.is_dir() or n.startswith("_") or n.endswith(".zip") or n.endswith("_key.txt"):
             continue
-        if n == "clicklab.py" or n.endswith(".bat") or n.endswith(".md") or \
+        if n == "clicklab.py" or n == "LICENSE.txt" or n.endswith(".bat") or n.endswith(".md") or \
            n in ("requirements.txt", "thresholds_measured.json"):
             inc.append(f)
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

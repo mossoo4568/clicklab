@@ -22,6 +22,9 @@ Video ke andar ka kaam (script, voice, editing) ye tool **nahi** karta — wo vi
 | 🧠 **Thumbnail Generation** | Model ka faisala **kis naap par** hua (6 models ka asli test + asli price), size ka ladder aur uska daam, 4K ka asli rasta, kharcha kam karne ke tareeke, text ka rule, aur **reference (i2i) ka sach — naape hue numberon ke saath** |
 | ✍️ **Title Lab** | Title ko YouTube ki tarah **truncate** karke dikhata hai — desktop browse (2 lines), mobile app (1 line), sidebar — kitne chars dikhenge, aur competitors ke asli titles isi size par. Neeche title ki jaanch |
 | 🅰️ **A/B Variants** | Title+thumbnail ke jode save karo, CSV me nikaalo. Asli winner YouTube Studio ke "Test and compare" se hi pata chalta hai |
+| 🔎 **Niche Finder** *(nayi)* | Topic likho (jaise "quiz", "minecraft parkour") → YouTube ke apne **Channel filter** se 6–50 channels dhoondh kar **har ek ki sirf asli gin**: channel ki **umar** (RSS ka joined-din), **latest 15 uploads ke views/tareekhen** (RSS), **kul uploads** (400 tak), **median views**, aur **reach = median ÷ subscribers** — rank isi se, "chhota magar chal raha hai" ka matlab size se zyada pahunch. **Do condition filters** (dropdown): *naya channel boom* = **6 mahine (180 din) se naya** + 100 se kam videos + subs ya median koi ek 1 lakh+; *chhota magar bara* = 4 saal+ purana + saal ke 12 se kam uploads + phir bhi 3 lakh+ subs ya 1 lakh+ median. **Strict match:** topic ka koi maayne wala lafz naam/handle/description ya titles me na mile to channel be-taaluq — bahar, aur ye gin bhi screen par. Sirf 10 hazar+ median wale list me aate hain; har dhoondh **Scan history** me mehfooz (kitne check kiye vs kitne qualify hue — dono gine) |
+| 🏦 **Competitor bank** *(nayi)* | Kisi bhi scan ke video card ya uske poore analysis me **"Competitor banao"** → ek click me save (style box khali ho to classifier ka andaza, warna record bina style ke — bank me saaf likha aata hai "classifier pehchaan nahi paaya"). Bank view me har record us din ka snapshot hai, source label ke saath; **"jeeton se bank bharo"** us scan ki jeeti hui videos (2×+ views/day) style-suggestion ke saath bhar deta hai. `thumb_output\cmpbank.json` — aapka data, laptop copy par saath chalta hai |
+| 🕘 **Scan history** *(nayi)* | Top bar ka button — **har scan ka mehfooz record** (topic, channel, Niche Finder dhoondh). Koi bhi record wapas usi ki table me khulta hai — numbers dobara naape nahi jaate; Niche records par **checked vs qualified** ki gin dikhti hai; delete bhi ho sakta hai. Niche dhoondh khatam hote hi row foran dikhti hai, page reload ki zaroorat nahi |
 
 ## Numbers ka matlab (jo tool check karta hai)
 
@@ -205,6 +208,45 @@ GET  /api/chcmp?id=<id1>,<id2>,<id3>  → 24 maap + winners + Mann-Whitney p/n +
 POST /api/rpm {cid, long, short, note}→ apna Studio RPM save karke us scan ki saari kamai dobara ginta hai
 ```
 
+## Niche Finder — chhote magar chalte hue channels ki dhoondh (poori gin, koi andaza nahi)
+
+Aapki request thi: *"wo channels jo abhi chhote hain magar chal rahe hain — naye niches dhoondh kar do."* Tab wahi karta hai, aur poora kaam **naape hue numberon** par hai, model ke andaze par nahi:
+
+1. Topic se **channel candidates** — YouTube ka apna Channel filter (`n` 6 se 50, default 18).
+2. Har candidate ka **asli data**: channel ki **umar** (YouTube RSS ka joined-din), **latest 15 uploads ke views aur tareekhen** (RSS), **kul uploads** (400 tak gine), **median views**, **subscribers**. Jo YouTube ke apne feed me likha hai, wahi dikhta hai.
+3. **Rank = reach = median views ÷ subscribers.** Isliye chhote channels bhi list me aa sakte hain jin ki pahunch badi hai — yehi "chhota magar chal raha hai" ka matlab hai.
+4. **Do condition filters** (dropdown, default "Sab") — har flag ki shart screen par usi waqt likhi hoti hai:
+   - **Naya channel boom:** channel **6 mahine (180 din) se naya**, kul uploads 100 se kam, aur subscribers ya median views **koi ek 1 lakh+**. (Pehle "naya" ki had 18 mahine thi — user ki definition ke mutabiq 6 mahine kar di gayi.)
+   - **Chhota magar bara:** channel 4 saal+ purana, saal ke **12 se kam** uploads, phir bhi **3 lakh+ subscribers ya 1 lakh+ median views** — ruk kar bhi bara ho gaya channel.
+5. **List me aane se pehle ke gates:** median views 10,000 se kam → bahar; 3 se kam uploads → bahar; **strict match** — topic ka koi bhi maayne wala lafz (3+ characters) channel ke naam/handle/description ya latest titles me na mile → **be-taaluq, bahar**, aur "Strict match: X channel bahar rakhe gaye" ki gin screen par; low-RPM zubaan ka andaza (naam/description ki script se) → alag flag, default filter me bahar.
+6. **Har dhoondh Scan history me mehfooz hoti hai** — topic, `n`, rows aur meta: **kitne candidates check kiye vs kitne qualify hue** (donon gine, kabhi jhooth nahi). Jawab 24 ghante cache hai; uske baad dobara naapa jaata hai.
+
+**Jo ye NAHI karti:** subscriber growth-rate, views ka trend, ya "ye niche aage chalega" ka waada — ye cheezein YouTube public data me hoti hi nahi, isliye yahan koi banawati score nahi banta. Flag sirf upar di gayi sharton par lagta hai, aur har flag apni shart khud likhta hai.
+
+```
+GET  /api/radar?q=<topic>&n=6..50   → {job,id} (naap shuru) | {rows,meta,cached:true} (24-ghante cache se)
+GET  /api/progress?id=<jid>         → job ki progress; done par rows + scan ka id
+GET  /api/niche?id=<scanid>         → mehfooz Niche Finder record (Scan history se wapas kholne ke liye)
+```
+
+## Competitor bank — apni chuni hui videos ka record
+
+Kisi bhi scan ke video card ya uske **poore analysis** me **"Competitor banao"** → style/niche/note ke saath save. Sidebar ka **Competitor bank** view har record ko us din ka snapshot dikhata hai (numbers "save ke waqt ke" likhe hain), channel ki creation date aur aakhri upload ke saath; "poora analysis" seedha us scan ka wo video khol deta hai. **"Jeeton se bank bharo"** us topic scan ki jeeti hui videos (2×+ median views/day) classifier ke style-suggestion ke saath bhar deta hai.
+
+**Imandari ka rule:** aapka chuna style/niche aapki raaye hai, numbers us scan ki asli readings — dono ka source record par likha. Style ka box khali chhod sakte ho: classifier ka andaza bhar jata hai, aur wo bhi na mile to record **bina style ke save hota hai** aur bank me saaf likha aata hai "classifier pehchaan nahi paaya — zoom me khud chun lein". (Pehle aisi video save hi nahi hoti thi — doosre laptop par "click kiya magar kuch nahi gaya" ki wajah yehi nikli.)
+
+```
+GET  /api/cmpb                                  → poori bank
+POST /api/cmpbsave {vid,style,niche,note,…}     → save (style khali bhi chalega)
+POST /api/cmpbdel {vid}                         → hatana
+POST /api/cmpbseed?id=<scan>                    → jeeti videos se bharo
+```
+File `thumb_output\cmpbank.json` (hadd 500) — aapka data hai, repo ya share zip me nahi jata.
+
+## Scan history — har dhoondh ka mehfooz record (audit trail)
+
+Top bar ka 🕘 button. **Har scan** — topic scan, channel scan, aur Niche Finder dhoondh — `thumb_output\scans\` me ek immutable JSON record ban jata hai. History view unhi records se banti hai: kind ke hisaab se filter (Topic / Channel / Niche), kisi bhi record ka **wahi table dobara khul jata hai** jo us din bana tha (numbers wahi ke, dobara naape nahi jaate), Niche records par **checked vs qualified** ki gin, aur delete ka option. Niche dhoondh khatam hote hi uski history row **foran** dikhti hai — page reload ki zaroorat nahi. Server restart ke baad bhi purani dhoondh wapas milti hain, kyunke record disk par hai.
+
 ## Requirements
 
 - **Python 3.10+** aur **Pillow + numpy**. Ek baar: **`setup.bat` double-click** — Python, Pillow, yt-dlp aur Tesseract install ho jayenge.
@@ -262,6 +304,22 @@ Aapki shart thi: *"analysis ka look YouTube Studio jaisa dikhna chahiye, saari v
 ## Badlav ka record (changelog)
 
 Har round ka record yahin likha jaye, naya upar. Har entry me teen cheezein lazmi: kya badla, kyun (wo cheez pehle kya galat kar rahi thi), aur browser me kya naapa gaya. Jo number yahan likhe hain wo usi waqt ke hain — screen par jo dikhega wo aapke apne data se banega.
+
+### Niche Finder — poori dhoondh, phir strict, aur "naya channel" ki umar 6 mahine
+
+**1. Kya naya hai:** Niche Finder tab: topic se 6–50 channels ki dhoondh, har channel ki **asli gin** (RSS se umar + latest 15 uploads ke views, listing se kul uploads aur median views), **rank = reach** (median ÷ subs), do condition filters (*naya channel boom*, *chhota magar bara*), aur har dhoondh ka record Scan history me. Uske baad ki maang par do sakhtiyan: **(a)** "naya channel" ki umar 18 mahine se ghata kar **6 mahine (180 din)** kar di — user ki definition yahi thi ("5–6 mahine hue hue"); **(b)** **strict match** — topic ka koi bhi maayne wala lafz naam/handle/description ya titles me na mile to channel dhoondh se bahar, aur "Strict match: X channel bahar rakhe gaye" ki gin UI me. Pehle ke cached jawab (strict lagne se pehle naape gaye) kabhi serve na hon, isliye cache key `rad_` se `rad2_` kar di — matlab kisi topic ki pehli dhoondh 2–3 minute phir lagegi.
+
+**2. Kyun zaroori tha (pehle kya galat tha):** "minecraft parkour" jaisi dhoondh me bhi be-taaluq channels aa rahe the (sirf subscribers bade the), aur 18-mahine-purane channels "naya" keh kar list me aa rahe the jabke user ne 5–6 mahine ke naye channels maange the.
+
+**3. Browser me naapa:** "quantum beekeeping" n=6 → 6 check, **1 strict-bahar, 1 qualify** — gin screen par sahi; "retro synthwave radio" → Japanese channel zubaan-filter se bahar, aur record **foran** Scan history me (bina reload). Zero console errors.
+
+### Competitor bank — ek click me save ("style chuno" ki rukawat hatayi)
+
+**1. Kya:** "Competitor banao" ab hamesha save karta hai — style ka box classifier ka andaza bhar leta hai, aur wo bhi na mile to record bina style ke save hota hai; bank view me honest note: "classifier pehchaan nahi paaya — zoom me khud chun lein". **2. Kyun:** doosre laptop par user ne click kiya magar kuch save nahi hua — classifier us video ka style na pehchaan paaya tha aur form "style chuno" par sakht block kar raha tha, jo user ki nazar mein "kuch nahi hua" lagta tha. **3. Naapa:** khaali-style record save hua → bank me honest note ke saath dikha → delete bhi theek; bank count 4→5→4.
+
+### Niche dhoondh ka result foran screen par (polling ab network-glitch bardaasht)
+
+**1. Kya:** dhoondh khatam hote hi table aur Scan history row foran. **2. Kyun:** progress-poll ka loop **ek** network glitch par mar jata tha, jabke server scan pura karke history me likh chuka hota tha — isliye result sirf history me milta, screen par nahi ("search khtm hotay hi result udhr nhi dikhta"). Ab loop 10 lagataar glitches bardaasht karta hai, aur job kho jane par bhi (server restart) `/api/radar` dobara maar kar mehfooz (cache) jawab khud khol leta hai. **3. Naapa:** live search → table + history row foran; zero console errors.
 
 ### Channel History — waqt ke saath sirf apni hi readings
 
@@ -403,12 +461,13 @@ Ye galti **source par** theek ki gayi (title alag, channel alag, duration alag),
 ## Data kahan hai
 
 ```
-thumb_output\scans\<id>.json     — har topic ka scan (items + aggregate + deep), 6 ghante cache
+thumb_output\scans\<id>.json     — har scan ka permanent record: topic scan (items + aggregate + deep), channel scan, aur Niche Finder dhoondh — "Scan history" isi folder se banti hai; topic ka result 6 ghante tak dobara naapa nahi jaata
 thumb_output\metac\<id>.json     — har video ka ASLI metadata (tags, description, chapters, likes, subs)
 thumb_output\own.json            — aapke Studio se daale hue asli CTR/retention (CSV import se bhar jaata hai)
 thumb_output\calibration.json    — aapke asli CTR par fit hue score ke wazan (cv-R² gate pass hua to hi banta hai)
 thumb_output\thumbs\<id>.jpg     — download hue competitor thumbnails (+ .kind = maxres/hq)
-thumb_output\chc\*.json          — channel search/listing ka cache (24 ghante)
+thumb_output\chc\*.json          — channel search/listing ka cache (24 ghante); Niche Finder ka jawab isi me `rad2_<key>.json` ke naam se 24 ghante mehfooz rehta hai (strict filter lagne se pehle ke purane jawab serve na hon, isliye key jaan boojh kar badli gayi — pehli dhoondh dobara naapi jaati hai)
+thumb_output\cmpbank.json        — Competitor bank (aapki chuni hui videos, hadd 500) — aapka data, share zip me nahi jata
 thumb_output\ocrc\*.json         — OCR ka cache (file + size ka key) — dobara scan = seconds
 thumb_output\regen\*.png         — ⚡ se bane behtar versions
 thumb_output\ai\*.jpg            — 🎨 se bani tasveerein (native size par; _raw = AI ka original)
@@ -421,10 +480,15 @@ models\                          — (optional local SD ke liye) .gguf / .safete
 
 ## Doosre laptop par le jaana
 
-1. `ClickLab` folder copy karo (ya `clicklab.py` + `ClickLab.bat` + `setup.bat`).
+**GitHub se (behtar tareeqa):**
+1. Ek baar: `git clone https://github.com/mossoo4568/clicklab.git`, phir us folder me **`setup.bat`** ek baar, phir **`ClickLab.bat`**.
+2. Update ke liye folder me **`git pull`** — magar **uske baad server band karke dobara chalao**. Chalta hua Python purana code memory me pakde rehta hai; pull ke baad restart na kiya to screen par purani hi baat chalegi (yehi wo jaal tha jisme "naya code liya magar result waisa hi" lagta hai). `git log --oneline -1` se confirm kar lo ke naya commit aa gaya.
+3. `thumb_output\` repo me nahi hai — isliye `git pull` aapki history/scans/bank ko **haath nahi lagata**. Apna data laptop-to-laptop le jaana ho to `thumb_output\` folder copy kar do.
+
+**Zip se (koi git nahi chahiye):**
+1. `ClickLab` folder copy karo (ya `ClickLab-share.zip` — usme code, docs aur `SHURU_KARNE_SE_PEHLE.txt` hai; keys aur history jaan boojh kar bahar hain).
 2. Naye laptop par pehle **`setup.bat`** ek baar, phir **`ClickLab.bat`**.
-3. Apne scans/variants/metadata saath le jaana ho to `thumb_output\` bhi copy kar do.
-4. Runware key folder ke saath chali jaati hai; naye machine par badalni ho to 🎨 tab se nayi daal do.
+3. Runware/Gemini/YouTube keys folder ke saath chali jaati hain; naye machine par badalni ho to AI thumbnail view se nayi daal do.
 
 ## Notes / limits
 
