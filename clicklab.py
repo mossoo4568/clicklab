@@ -3376,8 +3376,10 @@ GEM_API = "https://generativelanguage.googleapis.com/v1beta/models/"
 GEM_MODEL = "gemini-3.5-flash"
 # 3.x models soch (thinking) default ON rakhte hain — chhote maxOutputTokens me
 # saari token soch me kharch ho kar jawab khaali aata hai. gem_call thinking off
-# bhejta hai. 2.5 naye accounts par 404 deta hai — aakhri sahara hi sahi.
-GEM_MODEL_ALT = ["gemini-3.8-flash", "gemini-2.5-flash"]
+# bhejta hai. 2.5-flash naye accounts par "no longer available" 404 deta hai
+# (live test 28 Oct) — chain me rakhne se asli galti ke upar 404 ka dhuan chhata
+# hai, is liye hata diya. Sahara sirf 3.8-flash hai.
+GEM_MODEL_ALT = ["gemini-3.8-flash"]
 GEM_IMG_MODEL = "gemini-nano-banana-2.1"
 # Nano Banana 2.1 Google ka current recommended image model hai (docs 27 Oct 2026);
 # hamari dono keys ki model-list me maujood hai. Limits PER-MODEL hoti hain
@@ -3975,16 +3977,23 @@ def gem_try(cands, parts, **kw):
     in par agle model par jao. Baaki galti (kharab key/network cut) par wahi error
     lautata hoon — use model badal ke chhupana nahi."""
     last = None
+    errs = []
     for m in cands:
         r = gem_call(m, parts, **kw)
         if not r.get("error"):
             r["model"] = m
             return r
         e = str(r.get("error")).lower()
+        errs.append("%s → %s" % (m, str(r.get("error"))[:80]))
         if "http 404" in e or "http 503" in e or "timed out" in e or "http 429" in e:
             last = r
             continue
         return r
+    if last is not None and len(errs) > 1:
+        # poori zanjeer fail hui to aakhri error se pehli asli galti chhupana
+        # nahi — user ko poora raasta dikhana hai (honest errors rule).
+        last = dict(last)
+        last["error"] = "Gemini ke model kaam na kar sake: " + " | ".join(errs)
     return last or {"error": "Gemini ka koi model jawab na de saka"}
 
 
