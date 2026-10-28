@@ -8062,6 +8062,8 @@ def ideas_of(sid, k=10):
 
 # ---------------- copy the idea (ek video → tags/keywords → taqatwar ideas) ----------------
 
+IDEA_DIR = OUT / "ideapack"   # ideas ka disk cache — ek video par ek hi API call
+
 IDEA_ASK = (
     "Ye ek YouTube video ka ASLI metadata hai (title, uske asli tags, description ka tukda, "
     "aur user ka scan topic). Is se do cheezein chahiye — sirf ek valid JSON object, koi markdown nahi:\n"
@@ -8076,9 +8078,12 @@ IDEA_ASK = (
 
 def idea_pack(vid, topic=""):
     """Ek video ka idea-packet: ASLI tags (YouTube listing se) + gine-gaye keywords
-    (title+tags+description se) = fact; aur Gemini se matched topics + taqatwar ideas
-    = "model ka andaza" — kabhi naapon me nahi milte. Key na ho to sirf facts bhejte
-    hain aur saaf likhte hain ke ideas ke liye key chahiye."""
+    (title+tags+description se) = fact; aur matched topics + taqatwar ideas =
+    "model ka andaza" — kabhi naapon me nahi milte. Model chain: Gemini (apni key,
+    do models) → Google 503/baadh mein ho to Pollinations ka keyless muft rasta —
+    is liye ek provider girne par bhi ideas rukte nahi. Jawab disk par cache — dobara
+    click par seconds me, quota bachta hai. Key na ho to sirf facts bhejte hain aur
+    saaf likhte hain ke ideas ke liye key chahiye."""
     m = meta_of(vid)
     if m.get("err"):
         return {"ok": False, "error": m["err"]}
@@ -8102,10 +8107,29 @@ def idea_pack(vid, topic=""):
            "\nASLI TAGS: " + ", ".join(tags[:30]) +
            "\nDESCRIPTION (excerpt): " + re.sub(r"\s+", " ", (m.get("desc") or ""))[:1200] +
            (("\nUSER SCAN TOPIC: " + topic[:120]) if topic else ""))
-    r = gem_try([GEM_MODEL] + GEM_MODEL_ALT,
-                [{"text": ctx + "\n\n" + IDEA_ASK}], maxtok=3000, temperature=0.8)
+    # Do pakke: (1) ab ideas bhi wahi poori chain use karte hain jo verdict wala
+    # rasta use karta tha — Gemini (do models) → fail ho to Pollinations ka
+    # keyless muft rasta. Google ka 503/baadh aane par bhi ideas rukte nahi.
+    # (2) ek video ke ideas EK hi baar API se maange jaate hain, phir disk par
+    # cache — dobara click par seconds me jawab, aur dost ko dene par free
+    # quota har click par nahi jala karega. Input (title/tags/desc) badle to
+    # cache khud discard ho jaata hai (hash milta hai).
+    IDEA_DIR.mkdir(exist_ok=True)
+    ck = vid + ("_t" + hashlib.md5(topic.encode("utf-8")).hexdigest()[:8] if topic else "")
+    cf = IDEA_DIR / (ck + ".json")
+    chash = hashlib.md5(ctx.encode("utf-8")).hexdigest()
+    if cf.exists():
+        try:
+            c = json.loads(cf.read_text(encoding="utf-8"))
+            if c.get("ctx_h") == chash:
+                c.pop("ctx_h", None)
+                c["cached"] = True
+                return c
+        except Exception:
+            pass
+    r = llm_txt(ctx + "\n\n" + IDEA_ASK, maxtok=3000)
     if not r.get("error"):
-        out["model"] = r.get("model") or ""
+        out["model"] = r.get("via") or r.get("model") or ""
         J = _json_block(r.get("text") or "")
         if J:
             out["topics"] = [{"t": str(x.get("t") or "")[:120], "why": str(x.get("why") or "")[:200]}
@@ -8113,6 +8137,8 @@ def idea_pack(vid, topic=""):
             out["ideas"] = [{"t": str(x.get("t") or "")[:160], "angle": str(x.get("angle") or "")[:220],
                              "words": str(x.get("words") or "")[:40]}
                             for x in (J.get("ideas") or [])[:6] if isinstance(x, dict) and str(x.get("t") or "").strip()]
+            cf.write_text(json.dumps(dict(out, ctx_h=chash), ensure_ascii=False), encoding="utf-8")
+            out["cached"] = True
         else:
             out["error"] = "model ka jawab JSON me na padha ja saka — dobara try karein"
     else:
