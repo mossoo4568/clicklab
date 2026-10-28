@@ -10,5 +10,7 @@ ocrmode.txt
 
 # kaam ke beech ka kachra aur bane-banaye zip
 _*
+.*.tmpdir/
+.deploy_keys/
 *.zip
 __pycache__/
