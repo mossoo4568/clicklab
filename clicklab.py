@@ -6119,6 +6119,32 @@ def _radar_rows(q, n, jid=None):
     return rows, "", meta          # koi kap nahi: jitne paas hue utne (n se zyada kabhi ho hi nahi sakte)
 
 
+def _niche_hist(hkey, q, n, rows, meta, backfill=False):
+    """Har Niche Finder dhoondh scan-history (audit trail) me bhi likhi jaati hai — wahi
+    SCN_DIR jahan topic/channel scans rehte hain, taake "Scan history" me har naya scan
+    dikhe. id = sha hex (wahi jo /api/del samajh sakta hai). backfill=True: wo purani
+    dhoondh jo cache me hai par record nahi bani — ek baar dikhne par record ban jaye,
+    magar us waqt ki taarikh se jab wo ASLI chali thi (cache file ka mtime), aaj ka
+    nahi. Ek hi (topic,n) = ek hi id — duplicate record bante hi nahi."""
+    try:
+        f = SCN_DIR / (hkey + ".json")
+        if backfill and f.exists():
+            return
+        ts = dt.datetime.now(dt.timezone.utc).isoformat()
+        if backfill:
+            try:
+                mt = (CH_DIR / ("rad_" + hkey[:16] + ".json")).stat().st_mtime
+                ts = dt.datetime.fromtimestamp(mt, dt.timezone.utc).isoformat()
+            except Exception:
+                pass
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"id": hkey, "kind": "niche", "topic": q, "n": n,
+                                 "ts": ts, "rows": rows, "meta": meta}, ensure_ascii=False),
+                     encoding="utf-8")
+    except Exception:
+        pass
+
+
 def radar(q, n=18):
     """Niche Finder — wo channels jo abhi chhote hain par chal rahe hain: kam umar, kam
     videos, phir bhi zyada views. Job banata hai (har channel ~5-7 second — wahi settings
@@ -6128,12 +6154,16 @@ def radar(q, n=18):
     if not q:
         return {"err": "pehle niche/topic likho"}
     n = max(6, min(50, int(n or 18)))
-    key = "rad_" + hashlib.md5((q + "|" + str(n)).encode()).hexdigest()[:16]
+    hkey = hashlib.md5((q + "|" + str(n)).encode()).hexdigest()   # history-record id (pure hex)
+    key = "rad_" + hkey[:16]
     c = _cget(key)
     if c is not None:
         if isinstance(c, dict):
-            return {"rows": c.get("rows") or [], "meta": c.get("meta") or {}, "cached": True, "q": q}
-        return {"rows": c, "cached": True, "q": q}   # purana shape (bina meta) — bhi chalega
+            rows_, meta_ = c.get("rows") or [], c.get("meta") or {}
+        else:
+            rows_, meta_ = c, {}                                   # purana shape (bina meta) — bhi chalega
+        _niche_hist(hkey, q, n, rows_, meta_, backfill=True)      # jo dhoondh record se rah gayi wo bhi ab history me
+        return {"rows": rows_, "meta": meta_, "cached": True, "q": q}
     jid = hashlib.md5(("rad|" + q + "|" + str(dt.datetime.now())).encode()).hexdigest()[:10]
     JOBS[jid] = {"state": "run", "done": 0, "total": n, "current": "channels dhoondhe ja rahe hain…"}
     threading.Thread(target=_do_radar, args=(jid, q, n, key), daemon=True).start()
@@ -6147,6 +6177,7 @@ def _do_radar(jid, q, n, key):
             JOBS[jid].update({"state": "error", "error": err})
             return
         _cput(key, {"rows": rows, "meta": meta})
+        _niche_hist(hashlib.md5((q + "|" + str(n)).encode()).hexdigest(), q, n, rows, meta)
         JOBS[jid].update({"state": "done", "rows": rows, "meta": meta, "current": "mukammal"})
     except Exception as e:
         JOBS[jid].update({"state": "error", "error": repr(e)[:300]})
@@ -7174,7 +7205,7 @@ def list_scans():
                 entry = {"id": d["id"], "topic": d["topic"], "n": d["n"], "wide": bool(d.get("wide")),
                             # kept = filters ke baad bachi hui ginti. UI ko yahi dikhana chahiye,
                             # maangi hui nahi — warna ek hi screen par do alag "videos" number aa jate hain.
-                            "kept": len(d.get("items") or []),
+                            "kept": len(d.get("rows") or []) if d.get("kind") == "niche" else len(d.get("items") or []),
                             # kind/ch: channel scan ko topic scan se alag dikhane ke liye (naam,
                             # @handle, subscriber) — ye YouTube ka diya hua data hai.
                             "kind": d.get("kind") or "topic",
@@ -7185,7 +7216,9 @@ def list_scans():
                                     "tot_videos": (d.get("ch") or {}).get("tot_videos") or 0,
                                     "tot_shorts": (d.get("ch") or {}).get("tot_shorts") or 0}
                                    if d.get("kind") == "channel" else None),
-                            "meta": bool(d.get("meta")), "ts": d["ts"]}
+                            "meta": bool(d.get("meta")) if d.get("kind") != "niche" else False, "ts": d["ts"]}
+                if entry["kind"] == "niche":   # kitne check kiye gaye — history row me poora record
+                    entry["checked"] = int(((d.get("meta") or {}).get("checked")) or 0)
                 entry["age"] = int((dt.datetime.now() - dt.datetime.fromtimestamp(st.st_mtime)).total_seconds())
                 _SCNCACHE[f.name] = (st.st_mtime, st.st_size, {k: v for k, v in entry.items() if k != "age"})
                 out.append(entry)
@@ -8794,6 +8827,20 @@ class H(BaseHTTPRequestHandler):
                 if f.exists():
                     f.unlink()
                 return self._send(200, {"ok": True})
+            if u.path == "/api/niche":
+                # Mehfooz Niche Finder record (scan-history wala) — table usi me banti hai.
+                sid = re.sub(r"[^0-9a-f]", "", q.get("id") or "")[:32]
+                f = SCN_DIR / (sid + ".json")
+                if not f.exists():
+                    return self._send(200, {"err": "wo record nahi mila"})
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except Exception:
+                    return self._send(200, {"err": "record kharab hai"})
+                if d.get("kind") != "niche":
+                    return self._send(200, {"err": "wo Niche Finder ka record nahi"})
+                return self._send(200, {"q": d.get("topic") or "", "n": d.get("n"), "ts": d.get("ts"),
+                                        "rows": d.get("rows") or [], "meta": d.get("meta") or {}})
             if u.path == "/api/check":
                 return self._send(200, do_check(q.get("ref") or "", q.get("title") or ""))
             if u.path == "/api/meta":
@@ -9657,7 +9704,9 @@ function palItems(){
  SCANS.filter(s=>s.kind==="channel").forEach(s=>it.push({g:"Channel scan",
   t:(s.ch||{}).name||s.topic,s:fmt((s.ch||{}).subs||0)+" subscribers · "+s.kept+" measured",i:"eye",
   run:()=>{cur=s.id;D=null;IDEAS=null;WALK=null;SEL.clear();stSelUpd();go("ch")}}));
- SCANS.filter(s=>s.kind!=="channel").forEach(s=>it.push({g:"Topic scan",t:s.topic,
+ SCANS.filter(s=>s.kind==="niche").forEach(s=>it.push({g:"Niche search",t:"Niche Finder — "+s.topic,
+  s:(s.checked?s.checked+" checked · ":"")+s.kept+" channels",i:"target",run:()=>nicOpen(s.id)}));
+ SCANS.filter(s=>s.kind==="topic").forEach(s=>it.push({g:"Topic scan",t:s.topic,
   s:s.kept+" videos",i:"search",run:()=>{cur=s.id;D=null;IDEAS=null;WALK=null;SEL.clear();stSelUpd();go("cmp")}}));
  it.push({g:"Actions",t:"New topic scan",i:"plus",run:()=>newScan()});
  it.push({g:"Actions",t:"Open a new channel",i:"plus",run:()=>goNewChan()});
@@ -9825,7 +9874,7 @@ function navCard(s){if(!s)return '<div class="nm"><span>Koi scan khula nahi</spa
 function nav(){
  // Do alag selector: ek CHANNEL ke liye, ek TOPIC SCAN ke liye. Pehle ek hi dropdown
  // me dono mix the — user ko galat cheez kholne ka dar. Ab har kaam apni jagah.
- const chs=SCANS.filter(s=>s.kind==="channel"),tops=SCANS.filter(s=>s.kind!=="channel");
+ const chs=SCANS.filter(s=>s.kind==="channel"),tops=SCANS.filter(s=>s.kind==="topic");
  const copt=s=>{const c=s.ch||{},n=esc(c.name||s.topic);
   // Select tang hai isliye poora hisaab title (tooltip) me hai; saamne sirf naam aur
   // kitni videos gini gayi — wahi jo user channel chunte waqt dekhta hai.
@@ -9888,8 +9937,8 @@ function setHash(){const h="#/"+view+(cur?"/"+cur:"");if(location.hash===h)retur
  try{history.pushState({v:view,scan:cur},"",h)}catch(e){location.hash=h}}
 function fromHash(){const p=(location.hash||"").replace(/^#\/?/,"").split("/").filter(Boolean);
  if(p.length&&VW[p[0]])view=p[0];
- if(p[1]&&SCANS.some(x=>x.id===p[1])){if(p[1]!==cur){cur=p[1];D=null}}
- if(!p.length){if(!SCANS.some(x=>x.id===cur))cur=SCANS.length?SCANS[0].id:""}}
+ if(p[1]&&SCANS.some(x=>x.id===p[1]&&x.kind!=="niche")){if(p[1]!==cur){cur=p[1];D=null}}
+ if(!p.length){const t0=SCANS.filter(x=>x.kind!=="niche")[0];if(!SCANS.some(x=>x.id===cur))cur=t0?t0.id:""}}
 // RTN: har render ka token. Jo view async kaam karke baad me #main likhta hai, wo
 // pehle check karta hai ke ye abhi bhi wahi render hai — warna purana view naye view
 // ko clobber kar deta hai (nav alag, content alag).
@@ -10146,18 +10195,27 @@ function actAgo(sec){sec=sec||0;const d=Math.floor(sec/86400),h=Math.floor(sec%8
 function actF(f){_actF=f;actv()}
 function actCl(){_actQ="";_actF="all";actv()}
 function actRestore(id){const s=SCANS.find(x=>x.id===id);if(!s)return;
+ if(s.kind==="niche"){nicOpen(id);return}  // Niche record scan nahi hota — mehfooz dhoondh ka record hai, usi table me khulta hai
  // Pehle se current scan par "restore" koi kaam nahi — bas wahi view khol do.
  if(cur!==id){cur=id;D=null;IDEAS=null;WALK=null;SEL.clear();stSelUpd()}
  go(s.kind==="channel"?"ch":"cmp");toast("Restored — this scan is now the current one","ok")}
+// Mehfooz Niche Finder record ko usi ki table me kholta hai — numbers wahi hain jo us
+// din gine gaye the, naya scan nahi chalta. Filter wapas "Sab" par set hota hai.
+async function nicOpen(id){let r;try{r=await j("/api/niche?id="+encodeURIComponent(id))}catch(e){return failToast(e,"mehfooz Niche record kholne me")}
+ if(!r||r.err)return toast((r&&r.err)||"record nahi mila","warn");
+ RD={q:r.q,rows:r.rows||[],meta:r.meta||{},fsel:"all",hist:r.ts||""};RDJ=null;go("niche");
+ toast("Mehfooz Niche record khul gaya — ye usi waqt ki asli ginti hai","ok")}
 async function actDel(id){if(!confirm("Remove this scan? Its saved data goes with it."))return;
  await j("/api/del?id="+encodeURIComponent(id));
  if(cur===id){cur="";D=null}await boot();if(view==="act")actv();toast("removed")}
 function actv(){
- const tot=SCANS.length,tp=SCANS.filter(s=>s.kind!=="channel").length,cn=tot-tp,
-  meas=SCANS.reduce((a,s)=>a+(s.kept||0),0),cnt={all:tot,topic:tp,chan:cn};
+ const tot=SCANS.length,tp=SCANS.filter(s=>s.kind==="topic").length,cn=SCANS.filter(s=>s.kind==="channel").length,
+  nc=SCANS.filter(s=>s.kind==="niche").length,
+  meas=SCANS.filter(s=>s.kind!=="niche").reduce((a,s)=>a+(s.kept||0),0),cnt={all:tot,topic:tp,chan:cn,niche:nc};
  let L=SCANS.slice();
- if(_actF==="topic")L=L.filter(s=>s.kind!=="channel");
+ if(_actF==="topic")L=L.filter(s=>s.kind==="topic");
  if(_actF==="chan")L=L.filter(s=>s.kind==="channel");
+ if(_actF==="niche")L=L.filter(s=>s.kind==="niche");
  const q=_actQ.toLowerCase().trim();
  if(q)L=L.filter(s=>((s.topic||"")+" "+((s.ch||{}).name||"")).toLowerCase().indexOf(q)>=0);
  L.sort((a,b)=>actTs(b)-actTs(a));
@@ -10165,17 +10223,18 @@ function actv(){
   '<div class="sub">Every scan this tool has run, newest first. <b>Restore</b> makes an older scan the current one — nothing is re-scanned and no stored data changes.</div>';
  // Upar KPI row (brief ka pattern): pehle poora record, phir filter, phir table.
  h+='<div class="kpi">'+kpi("total scans",String(tot),"var(--acc)")+kpi("topic scans",String(tp))+
-  kpi("channel scans",String(cn))+kpi("videos measured",fmt(meas),"var(--grn)")+'</div>';
+  kpi("channel scans",String(cn))+kpi("niche searches",String(nc))+kpi("videos measured",fmt(meas),"var(--grn)")+'</div>';
  h+='<div class="bar"><div class="seg" role="group" aria-label="Filter tabs">'+
-  [["all","All"],["topic","Topic"],["chan","Channel"]].map(x=>'<button class="'+(_actF===x[0]?"on":"")+'" onclick="actF(\''+x[0]+'\')">'+x[1]+' <b>'+cnt[x[0]]+'</b></button>').join("")+
+  [["all","All"],["topic","Topic"],["chan","Channel"],["niche","Niche"]].map(x=>'<button class="'+(_actF===x[0]?"on":"")+'" onclick="actF(\''+x[0]+'\')">'+x[1]+' <b>'+cnt[x[0]]+'</b></button>').join("")+
   '</div><input id="aq" class="stq" placeholder="Search a channel or topic…" value="'+esc(_actQ)+'" aria-label="Search scans"></div>';
  if(!L.length){h+='<div class="es">'+(SCANS.length?
    '<h3>Nothing matches this filter</h3><div class="sub">Clear the search or show all scans again.</div><div class="bar" style="justify-content:center"><button class="sm" onclick="actCl()">Show all scans</button></div>':
    '<h3>No scans yet</h3><div class="sub">Run a topic scan or open a channel — every scan is saved here automatically.</div><div class="bar" style="justify-content:center"><button class="go sm" onclick="newScan()">'+ico("plus",14)+'New topic scan</button><button class="sm" onclick="goNewChan()">'+ico("plus",14)+'Open a channel</button></div>')+'</div>';
   $("#main").innerHTML=h;const q0=$("#aq");if(q0)q0.oninput=e=>{_actQ=e.target.value;actv()};return}
  h+='<div class="st"><table class="stt"><thead><tr><th class="l no">When</th><th class="l no">Target</th><th class="l no">Type</th><th class="no">Measured</th><th class="no">Actions</th></tr></thead><tbody>'+
-  L.map(s=>{const chn=s.kind==="channel",nm=esc(chn?(s.ch||{}).name||s.topic:s.topic),
+  L.map(s=>{const chn=s.kind==="channel",nic=s.kind==="niche",nm=esc(chn?(s.ch||{}).name||s.topic:s.topic),
    sub=chn?esc((s.ch||{}).handle||"")+" · "+fmt((s.ch||{}).subs||0)+" subscribers":
+    nic?(s.checked?fmt(s.checked)+" channels checked · ":"")+"qualified: "+s.kept+" channels":
     (s.n!=null?esc(String(s.n))+" requested · filters kept "+s.kept:"topic scan"),
    // ts ya to epoch-seconds number hai ya ISO string (dono purani builds me mile)
    when=new Date(typeof s.ts==="number"?s.ts*1000:(s.ts||0)),tms=when.getTime(),
@@ -10184,14 +10243,15 @@ function actv(){
    // ek hi row me alag lagte. ts na mile to mtime wali age hi sahi.
    rel=actAgo(isNaN(tms)?s.age:Math.max(0,(Date.now()-tms)/1000)),
    badge=chn?'<span class="ipill" style="color:var(--nic);border-color:rgba(59,130,246,.4)">CHANNEL</span>':
+    nic?'<span class="ipill" style="color:var(--grn);border-color:rgba(16,185,129,.4)">NICHE</span>':
     '<span class="ipill" style="color:var(--acc);border-color:rgba(var(--accrgb),.4)">TOPIC</span>',
    chips=(s.wide?'<span class="chip">wide net</span>':"")+(s.meta?'<span class="chip">with metadata</span>':"");
-  return '<tr class="srow" onclick="actRestore(\''+esc(s.id)+'\')" title="restore this scan as the current one">'+
+  return '<tr class="srow" onclick="actRestore(\''+esc(s.id)+'\')" title="'+(nic?"open this saved search":"restore this scan as the current one")+'">'+
    '<td class="l"><b>'+abs+'</b><span class="d">'+rel+'</span></td>'+
    '<td class="l"><b>'+nm+'</b><span class="d">'+sub+'</span></td>'+
    '<td class="l">'+badge+(s.id===cur?' <span class="ipill ok">current</span>':"")+(chips?'<span class="d">'+chips+'</span>':"")+'</td>'+
-   '<td><b>'+s.kept+'</b></td>'+
-   '<td><button class="sm" onclick="event.stopPropagation();actRestore(\''+esc(s.id)+'\')">restore</button> '+
+   '<td><b>'+s.kept+'</b>'+(nic?'<span class="d">channels</span>':"")+'</td>'+
+   '<td><button class="sm" onclick="event.stopPropagation();actRestore(\''+esc(s.id)+'\')">'+(nic?"open":"restore")+'</button> '+
    '<button class="sm dg" onclick="event.stopPropagation();actDel(\''+esc(s.id)+'\')" title="remove this scan — permanent">'+ico("trash",13)+'</button></td></tr>'}).join("")+
   "</tbody></table></div>";
  h+='<div class="sub" style="margin-top:10px">Restoring only points the tool at an older saved scan. To delete one instead use <b>remove</b> — that one is permanent.</div>';
@@ -10287,7 +10347,7 @@ async function homev(){const _t=RTN;
   return}
  spin();const d=await ensureData();if(_t!==RTN)return;
  const tot=SCANS.reduce((a,s)=>a+(s.kept||0),0),
-  nch=SCANS.filter(s=>s.kind==="channel").length,tp=SCANS.length-nch,
+  nch=SCANS.filter(s=>s.kind==="channel").length,tp=SCANS.filter(s=>s.kind==="topic").length,
   last=Math.max.apply(null,SCANS.map(actTs));
  let h='<div class="ph"><h1>'+ico("home",22)+' Home'+
   '<span class="ipill" style="color:var(--acc);border-color:rgba(var(--accrgb),.4)">'+SCANS.length+" scans on record</span></h1>"+
@@ -10353,15 +10413,16 @@ async function homev(){const _t=RTN;
  h+='<div class="card" style="margin-top:14px"><div class="chd">'+ico("clock",20)+"<b>Recent scans</b>"+
   '<span class="sp"></span><button class="sm" onclick="go(\'act\')">poori Scan history</button></div>'+
   '<div class="st stscr"><table class="stt"><thead><tr><th class="l no">When</th><th class="l no">Target</th><th class="l no">Type</th><th class="no">Measured</th><th class="no">Action</th></tr></thead><tbody>'+
-  L.map(s=>{const chn2=s.kind==="channel",t=actTs(s),
+  L.map(s=>{const chn2=s.kind==="channel",nic2=s.kind==="niche",t=actTs(s),
    abs2=t?new Date(t).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"—";
-   return '<tr class="srow" onclick="actRestore(\''+esc(s.id)+'\')" title="restore this scan as the current one">'+
+   return '<tr class="srow" onclick="actRestore(\''+esc(s.id)+'\')" title="'+(nic2?"open this saved search":"restore this scan as the current one")+'">'+
     '<td class="l"><b>'+abs2+'</b><span class="d">'+(t?actAgo((Date.now()-t)/1000):"")+"</span></td>"+
     '<td class="l"><b>'+esc(chn2?(s.ch||{}).name||s.topic:s.topic)+"</b></td><td class=\"l\">"+
     (chn2?'<span class="ipill" style="color:var(--nic);border-color:rgba(59,130,246,.4)">CHANNEL</span>':
+     nic2?'<span class="ipill" style="color:var(--grn);border-color:rgba(16,185,129,.4)">NICHE</span>':
      '<span class="ipill" style="color:var(--acc);border-color:rgba(var(--accrgb),.4)">TOPIC</span>')+
-    (s.id===cur?' <span class="ipill ok">current</span>':"")+'</td><td><b>'+s.kept+"</b></td>"+
-    '<td><button class="sm" onclick="event.stopPropagation();actRestore(\''+esc(s.id)+'\')">restore</button></td></tr>'}).join("")+
+    (s.id===cur?' <span class="ipill ok">current</span>':"")+'</td><td><b>'+s.kept+"</b>"+(nic2?'<span class="d">channels</span>':"")+"</td>"+
+    '<td><button class="sm" onclick="event.stopPropagation();actRestore(\''+esc(s.id)+'\')">'+(nic2?"open":"restore")+'</button></td></tr>'}).join("")+
   "</tbody></table></div></div>";
  $("#main").innerHTML=h;
  // Ideas strip: /api/ideas ka chhota preview (sirf jeete hue) — poora kaam Ideas page par hi
@@ -10388,7 +10449,7 @@ async function boot(){try{if(localStorage.getItem("cl_nav")==="off")document.bod
   const t=setInterval(async()=>{try{const x=await j("/api/sys");if(x&&x.warm){SYS=x;
    if((SYS.warm.ocr&&SYS.warm.sk)||++n>12){clearInterval(t);if(!D&&view==="cmp")render()}}}
    catch(e){clearInterval(t)}},1200)}
- if(!SCANS.some(s=>s.id===cur))cur=SCANS.length?SCANS[0].id:"";
+ if(!SCANS.some(s=>s.id===cur)){const t0=SCANS.filter(s=>s.kind!=="niche")[0];cur=t0?t0.id:"";}
  fromHash();render()}
 function newScan(){TOPIC="";D=null;cur="";go("cmp");const e=$("#tq");if(e)e.focus()}
 // Channel dhoondhne ka raga alag: Channel Analytics ke form me le jao, aur box
@@ -12141,6 +12202,7 @@ function radarTable(){
  else if(fs==="purana")rows=all.filter(c=>c.flag==="chhotabada");
  if(!rows.length)return '<div class="card"><h3>'+ico("target",18)+'Niche Finder — "'+esc(RD.q)+'"</h3><div class="sub">'+(fs!=="all"?((all.length?'Is condition me is list ka koi channel nahi aaya. "Sab dikhaao" par wapas jaayein — note: ye flag <b>naye</b> dhoondh par lagte hain, 24 ghante purane cache par nahi; "Dhoondo" dobara chalane se naye gin aur flags aa jayenge.':'Is condition me koi channel nahi aaya — "Sab dikhaao" par wapas jaayein.')):'Is niche me wo koi bhi channel nahi mila jiske <b>3+ videos par 10 hazar+ median views</b> hon. Niche ka spelling badal kar dobara chalayein, ya channels ki ginti badha kar dohoondein — ya phir "Search only" se mile channels khud dekh lein.')+'</div></div>';
  return '<div class="card"><h3>'+ico("target",18)+'Niche Finder — "'+esc(RD.q)+'" ('+rows.length+' channels'+(fs!=="all"?' — condition filter, kul '+all.length+' me se':"")+')</h3>'+
+  (RD.hist?'<div class="sub">Ye <b>'+new Date(RD.hist).toLocaleString()+'</b> ka mehfooz record hai (Scan history se khola gaya) — ye numbers usi din ke gine hue hain, kuch dobara nahi naapa. Taaza dhoondh ke liye upar "Dhoondo" dobara chalayein.</div>':"")+
    (((RD.meta||{}).checked&&(RD.meta||{}).checked!==all.length)?'<div class="sub"><b>'+RD.meta.checked+' channels check kiye gaye</b> — list me sirf wo '+all.length+' aaye jinhone <b>3+ videos, 10 hazar+ median views aur zubaan</b> ki shart poori ki; baaki check hone ke baad bhi bahar rahe (ye ginti chhupayi nahi gayi). Zyada chahiye to channels ki ginti badha kar dobara dhoondein.</div>':"")+
   (RD.cached?'<div class="sub">Ye jawab 24 ghante ke cache se hai — bilkul naya dhoondhne ke liye button dobara chalayein.</div>':"")+
    ((RD.meta||{}).lang_skipped?'<div class="sub"><b>Zubaan filter:</b> '+RD.meta.lang_skipped+' channel dhoondh se bahar rakh gaye kyunke naam/title se unki zubaan low-RPM lagi'+((RD.meta.langs||[]).length?' ('+esc((RD.meta.langs||[]).join(", "))+')':'')+'. Pehchaan <b>andaze</b> se hoti hai (script + aam lafz) — shak ho to channel bahar nahi gaya. English/high-RPM zubaanein rakhi gayi hain, kyunki is tool ki maap unhi ke hisaab se hain.</div>':"")+
