@@ -12155,6 +12155,9 @@ function chCands(){
 // (flat listing), views÷subscribers. Model se ek shabd bhi nahi juda — jo gin
 // nahi saka wo khali chhoda hai. Low-RPM zubaanein (andaza) dhoondh se bahar.
 function rdView(){if(view==="niche")nichev();else chanv()}
+// Scan khatam hote hi history ki list bhi taaza ho — warna naya record page reload tak
+// "kahin nahi dikhta". SCANS ki apni fetch, poora boot nahi.
+async function refScans(){try{const d=await j("/api/scans");SCANS=d.scans}catch(e){}}
 async function rdGo(){
  const el=$("#nq")||$("#cq");
  const q=((el||{}).value||"").trim();if(!q)return toast("pehle niche/topic likho");CQ=q;
@@ -12162,13 +12165,13 @@ async function rdGo(){
  const fs=($("#nf")||{}).value||"all";   // filter selection naye result par bhi lg rahe — user ne wahi chuna hai
  let r;try{r=await j("/api/radar?q="+encodeURIComponent(q)+"&n="+nn)}catch(e){return failToast(e,"radar shuru karne me")}
  if(!r)return;if(r.err)return toast(r.err);
- if(r.rows){RD={q:q,rows:r.rows,meta:r.meta||{},fsel:fs,cached:true};RDJ=null;rdView();return}
+ if(r.rows){RD={q:q,rows:r.rows,meta:r.meta||{},fsel:fs,cached:true};RDJ=null;refScans();rdView();return}
  RDJ={job:r.job,q:q,total:r.total||0,done:0,cur:"channels dhoondhe ja rahe hain…"};rdView();
  for(let k=0;k<2400;k++){
   await new Promise(z=>setTimeout(z,1500));
   let p;try{p=await j("/api/progress?id="+r.job)}catch(e){break}
   if(!p||p.state==="gone")break;
-  if(p.state==="done"){RD={q:q,rows:p.rows||[],meta:p.meta||{},fsel:fs,cached:false};RDJ=null;rdView();
+  if(p.state==="done"){RD={q:q,rows:p.rows||[],meta:p.meta||{},fsel:fs,cached:false};RDJ=null;refScans();rdView();
    toast((p.rows||[]).length?"radar mukammal — dekhne layak channels upar hain":"is niche me is maap (10 hazar+ median views) ka koi channel nahi mila");return}
   if(p.state==="error"){RDJ=null;rdView();toast("radar atka gaya: "+(p.error||"?"));return}
   RDJ={job:r.job,q:q,total:p.total||0,done:p.done||0,cur:p.current||"…"};
