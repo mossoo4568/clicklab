@@ -318,6 +318,33 @@ nahi) — kam video wali row par "kam bharosa" label ke saath.
   Windows/DPI settings mein browser window screen se thodi zyada chaudi ho jati hai
   (maximize bug), aur tab dayein taraf ka hissa screen ke bahar chala jata hai.
 
+## Ghanti-war auto reading aur candlestick graph — latest pass
+
+- **Tool ab khud ghanti-war naapta hai:** server chalu rehne par ek daemon chalta hai —
+  pehla round ~1 minute baad, phir **har ghante** — jo bhi channel Channel History me
+  tracked hai uski ek halki ASLI reading: subscribers About page se dubara (`bust=True`),
+  videos ki current views listing pages se (listing me views khud hote hain — dobara
+  padhna asli dobara-naap hai). Har reading `thumb_output\hist\<cid>.json` me save
+  hoti rehti hai. **Server band = readings band** — jitni der tool chala utni hi series
+  bhari milegi; kuch bhi peeche se bhara nahi jaata.
+- **Candlestick (Channel History me naya card):** metric (subscribers/views/uploads) aur
+  window chuno — 24 ghante = har ghante ki candle, hafta = har 6 ghante, mahina/sab =
+  har roz ki candle. Chart par hover/har candle par us bucket ki asli readings ka
+  open/high/low/close aur kitni readings se bani — sab likha hota hai.
+- **Imandari ke rules (graph ke liye bhi wahi):** bucket khaali ho to **koi candle
+  nahi, sirf gap ka nishan** — reading hi nahi li gayi to candle banana banawat hoti.
+  Ek hi reading → flat doji (ek asli number). Views-candle me sirf wohi readings jo
+  **usi waqt** naapi gayi thin (per-video numbers us snapshot ke waqt measure hue);
+  subscribers YouTube ki taraf se rounded hain — chhote window me flat candles
+  aana **normal aur sach** hai, chhupaaya nahi jaata.
+- **Quota/prabhav:** sampler yt-dlp/urllib use karta hai — **YouTube Data API unit
+  kharab nahi hota**; prati channel ghanti-war ~2 page-reads, beech me 2 second
+  farq. History files slim snapshots se bharti hain (~20-25KB prati reading) aur
+  1200 readings tak mehfooz rehti hai (≈ 50 hafte).
+- **Agar candles khaali dikhein:** note khud samjhata hai — sampler ka pehla round
+  server ke ~1 minute baad hai; "Take a snapshot now" se usi waqt ki asli reading
+  mil jaati hai, aur "Everything" window purani asli readings dikhata hai.
+
 ## Troubleshooting
 
 - `yt-dlp not found` — matlab `pip install yt-dlp` skip hua. Wo lagao, phir tool restart.

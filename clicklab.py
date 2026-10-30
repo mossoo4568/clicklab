@@ -5730,13 +5730,16 @@ def ch_search(q, n=50):
     return got
 
 
-def ch_info(url):
+def ch_info(url, bust=False):
     """Channel ka about page: naam, @handle, subscriber, description, channel ke apne tags.
-    (Joined date aur channel ka total views yt-dlp ko nahi milta — isliye yahan nahi hai.)"""
+    (Joined date aur channel ka total views yt-dlp ko nahi milta — isliye yahan nahi hai.)
+    `bust=True` auto-sampler use karta hai: har ghante ka matlab cache tod kar ASLI
+    naya padhna hai — purani cache se ghanti-war reading jhoot hoti."""
     key = "inf_" + hashlib.md5(url.encode()).hexdigest()[:16]
-    c = _cget(key)
-    if c is not None:
-        return c
+    if not bust:
+        c = _cget(key)
+        if c is not None:
+            return c
     y = find_ytdlp()
     rc, out, err = run([y, "--no-update", "--no-warnings", "-J", url.rstrip("/") + "/about"], timeout=150)
     try:
@@ -7313,7 +7316,7 @@ def list_scans():
     return out
 
 
-HIST_MAX = 60               # ek channel ke itne snapshot (usse purane hat jate hain)
+HIST_MAX = 1200             # ek channel ke itne snapshot (usse purane hat jate hain). Auto-sampler har ghanta ek reading likhta hai — 1200 ≈ 50 hafte.
 
 
 def _hist_path(cid):
@@ -7412,6 +7415,8 @@ def hist_add(d, src="scan", ts=None):
         h = _hist_load(cid)
         h["name"] = ch.get("name") or h.get("name") or ""
         h["handle"] = ch.get("handle") or h.get("handle") or ""
+        if ch.get("url"):
+            h["url"] = ch["url"]      # scan file delete ho jaye tab bhi history padhi ja sake
         sn = [x for x in h["snaps"] if (x.get("sid"), x.get("ts")) !=
               (d.get("id") or "", str(ts or d.get("ts2") or d.get("ts") or ""))]
         sn.append(_hist_snap(d, src, ts))
@@ -7504,6 +7509,232 @@ def hist_take(sid):
     h = _hist_load(cid)
     return {"ok": True, "cid": cid, "n": len(h["snaps"]), "got": got,
             "elapsed": round(time.perf_counter() - t0, 1)}
+
+
+AUTOSNAP = {"on": True, "mins": 60, "last": "", "round": 0, "n": 0, "errs": 0}
+
+
+def _hist_add_snap(cid, name, handle, snap, url=""):
+    """Ek taiyaar snapshot ko history file me jod do (hist_add ka nichla aadha hissa;
+    auto-sampler ka slim snapshot isi se likha jaata hai)."""
+    try:
+        HIST_DIR.mkdir(parents=True, exist_ok=True)
+        h = _hist_load(cid)
+        h["name"] = name or h.get("name") or ""
+        h["handle"] = handle or h.get("handle") or ""
+        if url:
+            h["url"] = url
+        sn = [x for x in h["snaps"] if (x.get("sid"), x.get("ts")) !=
+              (snap.get("sid"), snap.get("ts"))]
+        sn.append(snap)
+        sn.sort(key=lambda x: str(x.get("ts") or ""))
+        h["snaps"] = sn[-HIST_MAX:]
+        h["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+        _hist_path(cid).write_text(json.dumps(h, ensure_ascii=False), encoding="utf-8")
+        return 1
+    except Exception:
+        return 0
+
+
+def _hist_auto(sid, cid0=""):
+    """Auto-sampler ki halki ghanti-war reading — history series bharne ke liye.
+    Do ASLI source: subscriber = channel ka About page (bust=True, cache tod kar),
+    views = listing pages (YouTube listing me views khud deta hai — walk_pack wahi
+    padhta hai). Scan file mile to uska item-set bhi use hota hai; na mile to
+    history file me saved URL se bhi reading hoti hai (subs + upload counts phir
+    bhi asli hain). Scan file ko CHHETA nahi: snapshot slim hai (id + abhi ki views +
+    upload-day) taake ghanti-war readings megabytes me na badlein. Jo video is
+    listing me nahi mila uska number is snapshot me HAI hi nahi — purana value dohra
+    kar likhna us waqt ka jhoot hota. About page fail ho to subs None — candle us
+    ghante me gap dikhati hai, pichla value dohra kar flat candle nahi."""
+    d = {}
+    if sid:
+        f = SCN_DIR / (sid + ".json")
+        if f.exists():
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                d = {}
+            if d.get("kind") != "channel":
+                d = {}
+    ch = d.get("ch") or {}
+    cid = ch.get("id") or cid0
+    url = (ch.get("url") or "").strip()
+    if not url and cid:
+        try:
+            h = _hist_load(cid)
+            url = (h.get("url") or "").strip()
+            if not url:
+                # purani history file me URL save nahi hua tha — handle channel ka
+                # apna pata hai, usse banana jhoot nahi hai
+                hd = (h.get("handle") or "").strip()
+                if hd.startswith("@"):
+                    url = "https://www.youtube.com/" + hd
+        except Exception:
+            url = ""
+    if not cid or not url:
+        return {"err": "channel ki id/URL na scan me mili na history file me"}
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    subs = None
+    try:
+        info = ch_info(url, bust=True)
+        if info.get("subs"):
+            subs = int(info["subs"])
+    except Exception:
+        pass
+    wk = None
+    try:
+        w2 = walk_pack(ch_lists(url))
+        if w2["v"] or w2["s"]:
+            wk = w2
+    except Exception:
+        pass
+    if wk is None and subs is None:
+        return {"err": "is ghante page aur listing dono nahi padhe ja sake"}
+    vids, tv, tsh = {}, 0, 0
+    if wk:
+        tv, tsh = len(wk["v"]), len(wk["s"])
+        wmap = {e["id"]: e.get("w") for e in (wk["v"] + wk["s"])
+                if e.get("id") and e.get("w") is not None}
+        for it in d.get("items") or []:
+            vid = it.get("id")
+            if vid and vid in wmap:
+                vids[vid] = {"v": wmap[vid], "d": it.get("days"),
+                             "s": 1 if it.get("sh") else 0}
+    ups = [i.get("upload") for i in (d.get("items") or []) if i.get("upload")]
+    snap = {"ts": now, "vm": now if wk else "", "sid": sid, "src": "auto",
+            "meas": ["views"] if wk else [],
+            "subs": subs, "tv": (tv if wk else None), "tsh": (tsh if wk else None),
+            "nm": len(vids),
+            "views": (sum(v["v"] or 0 for v in vids.values())
+                      if (wk and vids) else None),
+            "likes": None, "cmts": None,
+            "first": min(ups) if ups else "", "last": max(ups) if ups else "",
+            "vids": vids}
+    if not _hist_add_snap(cid, ch.get("name") or "", ch.get("handle") or "",
+                          snap, url):
+        return {"err": "history file me nahi likha ja saka"}
+    return {"ok": True, "subs": subs is not None, "views": len(vids)}
+
+
+def _autosnap_round():
+    """Har tracked channel ke liye ek halki reading lo. Scan file zinda ho to uska
+    item-set; delete ho chuki ho to history file ke saved URL se subs+counts —
+    latest reading ka sid pehle, phir purane sids me se jo file maujood ho."""
+    if not HIST_DIR.exists():
+        return
+    jobs = []
+    for f in sorted(HIST_DIR.glob("*.json")):
+        try:
+            h = _hist_load(f.stem)
+            sid = ""
+            for s in reversed(h.get("snaps") or []):
+                c = s.get("sid") or ""
+                if c and (SCN_DIR / (c + ".json")).exists():
+                    sid = c
+                    break
+            jobs.append((sid, f.stem))
+        except Exception:
+            continue
+    AUTOSNAP["round"] += 1
+    for sid, cid in jobs:
+        try:
+            r = _hist_auto(sid, cid)
+            if r.get("ok"):
+                AUTOSNAP["n"] += 1
+            else:
+                AUTOSNAP["errs"] += 1
+        except Exception:
+            AUTOSNAP["errs"] += 1
+        time.sleep(2)          # channels ke beech saans — YouTube ko ek jhatke me 13 requests na lagen
+    AUTOSNAP["last"] = dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _autosnap_loop():
+    """Server ke saath chalne wala daemon: pehla round ~1 minute baad (server stable
+    ho), phir har ghante. Har reading history file me save hoti rehti hai — candles
+    isi se banti hain."""
+    time.sleep(75)
+    while True:
+        try:
+            _autosnap_round()
+        except Exception:
+            AUTOSNAP["errs"] += 1
+        time.sleep(max(5, int(AUTOSNAP.get("mins") or 60)) * 60)
+
+
+def _hist_candles(sid, metric, rng):
+    """Candlestick (crypto-jaisa) SIRF apni asli readings se: har bucket ka
+    o/h/l/c = us bucket me padi ASLI readings ka pehla/zyada/kam/aakhri value.
+    Bucket khaali → koi candle nahi, gap — reading hi nahi li gayi to candle
+    banana banawat hoti. Ek hi reading → doji (ek asli number, range nahi).
+    rng: 24h → 1-ghanti candles, 7d → 6-ghante, 30d/all → roz."""
+    f = SCN_DIR / (sid + ".json")
+    if not f.exists():
+        return {"err": "wo scan file nahi mili"}
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return {"err": "scan file padhi nahi ja saki"}
+    cid = (d.get("ch") or {}).get("id") or ""
+    if not cid:
+        return {"err": "is scan me channel ki id nahi hai"}
+    if metric not in ("subs", "views", "ups"):
+        metric = "subs"
+    BK = {"24h": 60, "7d": 360, "30d": 1440, "all": 1440}
+    if rng not in BK:
+        rng = "24h"
+    bucket = BK[rng]
+    h = _hist_load(cid)
+    sn = sorted(h["snaps"], key=lambda x: str(x.get("ts") or ""))
+    pts = []
+    for s in sn:
+        t = _iso(s.get("ts"))
+        if t is None:
+            continue
+        if metric == "subs":
+            v = s.get("subs")
+        elif metric == "views":
+            v = s.get("views")
+            # views total tab tak ASLI reading nahi jab per-video numbers us snapshot
+            # ke waqt naape hi na gaye hon (vm != ts) — wo total pichle waqt ka hai,
+            # usse aaj ki candle banana pichla number aaj par paste karna hota.
+            if v is not None and (str(s.get("vm") or "") != str(s.get("ts") or "")
+                                  or not (s.get("nm") or 0)):
+                v = None
+        else:
+            v = None if (s.get("tv") is None and s.get("tsh") is None) else \
+                (s.get("tv") or 0) + (s.get("tsh") or 0)
+        if v is None:
+            continue
+        pts.append((t, int(v)))
+    now = dt.datetime.now()
+    if rng == "all":
+        t_start = pts[0][0] if pts else now
+    else:
+        hrs = {"24h": 24, "7d": 168, "30d": 720}[rng]
+        t_start = max(now - dt.timedelta(hours=hrs), pts[0][0] if pts else now)
+    fb = int(t_start.timestamp() // (bucket * 60)) * (bucket * 60)
+    b, out = dt.datetime.fromtimestamp(fb), []
+    while b < now and len(out) < 400:
+        e = b + dt.timedelta(minutes=bucket)
+        inb = [v for t, v in pts if b <= t < e]
+        if inb:
+            out.append({"t": b.isoformat(timespec="seconds"), "o": inb[0],
+                        "h": max(inb), "l": min(inb), "c": inb[-1], "n": len(inb)})
+        else:
+            out.append({"t": b.isoformat(timespec="seconds"), "n": 0})
+        b = e
+    n_read = sum(c.get("n", 0) for c in out)
+    note = ""
+    if not n_read:
+        note = ("No real reading falls inside this window — the candles are empty because "
+                "no reading was taken at these times. The hourly sampler fills these "
+                "gaps as it runs; a wider range shows older real readings, and "
+                "\u201cTake a snapshot now\u201d reads the channel this second.")
+    return {"metric": metric, "range": rng, "bucket": bucket, "candles": out,
+            "n_read": n_read, "auto": dict(AUTOSNAP), "note": note,
+            "first_read": (pts[0][0].isoformat(timespec="seconds") if pts else "")}
 
 
 def _pair(p, s, topn=15):
@@ -7680,7 +7911,25 @@ def _hist_windows(sn, sid):
         if base is not None:
             w["base"] = base.get("ts")
             w["gap"] = _gap_days(base.get("ts"), last.get("ts"))
-            w["d_subs"] = (last.get("subs") or 0) - (base.get("subs") or 0)
+            w["d_subs"] = None
+            if last.get("subs") is not None and base.get("subs") is not None:
+                w["d_subs"] = last["subs"] - base["subs"]
+            elif last.get("subs") is None:
+                # aakhri snapshot ka subs padha hi nahi ja saka (About page fail) —
+                # sabse aakhri ASLI subs reading aur uski apni baseline use karo,
+                # aur ye bhi likho ke reading kis waqt ki hai.
+                ls = next((x for x in reversed(sn) if x.get("subs") is not None), None)
+                lt2 = _iso(ls.get("ts")) if ls else None
+                if lt2 is not None:
+                    cut2 = lt2 - dt.timedelta(days=days)
+                    bs = None
+                    for x in sn:
+                        t2 = _iso(x.get("ts"))
+                        if t2 is not None and t2 < lt2 and t2 <= cut2 and x.get("subs") is not None:
+                            bs = x
+                    if bs is not None:
+                        w["d_subs"] = ls["subs"] - bs["subs"]
+                        w["subs_at"] = ls.get("ts")
             w["d_up"] = ((last.get("tv") or 0) + (last.get("tsh") or 0)) - \
                         ((base.get("tv") or 0) + (base.get("tsh") or 0))
             p = _pair(base, last, topn=0)
@@ -7735,7 +7984,9 @@ def hist_get(sid):
             p = sn[i - 1]
             r["gap"] = _gap_days(p.get("ts"), s.get("ts"))
             r["vm_same"] = p.get("vm") == s.get("vm")
-            r["d_subs"] = (s.get("subs") or 0) - (p.get("subs") or 0)
+            r["d_subs"] = ((s.get("subs") - p.get("subs"))
+                           if (s.get("subs") is not None and p.get("subs") is not None)
+                           else None)
             r["d_up"] = ((s.get("tv") or 0) + (s.get("tsh") or 0)) - \
                         ((p.get("tv") or 0) + (p.get("tsh") or 0))
             m = _pair(p, s, topn=0)
@@ -7755,6 +8006,7 @@ def hist_get(sid):
             "handle": h.get("handle") or (d.get("ch") or {}).get("handle") or "",
             "scan": sid, "n": len(sn), "span": span, "snaps": rows, "pairs": pairs,
             "windows": _hist_windows(sn, sid),
+            "auto": dict(AUTOSNAP),
             "updated": h.get("updated") or ""}
 
 
@@ -8890,6 +9142,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, start_chan(q.get("q") or q.get("url") or "", n))
             if u.path == "/api/hist":
                 sid = q.get("id") or ""
+                if q.get("candles"):
+                    return self._send(200, _hist_candles(sid, q.get("metric") or "subs",
+                                                         q.get("range") or "24h"))
                 if pnum(q.get("take")):
                     r = hist_take(sid)
                     if r.get("ok"):
@@ -10288,7 +10543,9 @@ function histWindows(H){const ws=H.windows||[];if(!ws.length)return "";
   (w.base?'<br><small>baseline '+esc(histT(w.base))+(w.gap!=null?' · actual span '+histDur(w.gap):'')+'</small>':'<br><small>no reading that far back</small>')+'</th>').join("");
  const row=(lab,f)=>'<tr><td>'+lab+'</td>'+ws.map(w=>'<td class="num">'+f(w)+'</td>').join("")+'</tr>';
  let body="";
- body+=row('Subscribers',w=>!w.base?'<span class="sub">—</span>':hdl(w.d_subs));
+ body+=row('Subscribers',w=>!w.base?'<span class="sub">—</span>':
+  (w.d_subs==null?'<span class="sub" title="no subscriber reading exists for these times — the channel page did not answer when the reading was attempted">— no subs reading</span>'
+   :hdl(w.d_subs)+(w.subs_at?'<br><small>from the reading at '+esc(histT(w.subs_at))+' (newer attempts could not read subs)</small>':'')));
  body+=row('Uploads on the channel',w=>!w.base?'<span class="sub">—</span>':hdl(w.d_up));
  body+=row('Views gained <small>(videos measured in both readings)</small>',w=>!w.base?'<span class="sub">—</span>':
    (w.d_views==null?'<span class="sub" title="neither reading re-measured per-video views — use “Re-measure their views” to make this real">not re-measured</span>'
@@ -10302,6 +10559,62 @@ function histWindows(H){const ws=H.windows||[];if(!ws.length)return "";
   '<div class="sub">'+(anyB?
    'Each window compares the latest reading against the last reading taken <b>before that window started</b>, and the header states that baseline’s real time — if the newest baseline is older than the window, the span shown is the real one. A window with no baseline is left empty: without a second reading there is no difference, and writing 0 would be a lie. Subscriber deltas use YouTube’s public counts, which are <b>rounded</b> (e.g. “1.23M”) — a real change smaller than that rounding cannot show up; that is YouTube’s limit, not a hidden number. Views gained counts only videos measured in both readings — the same rule as the pair tables. Watch time is private to the channel owner (YouTube Studio), so it is computed only for videos whose Studio retention you imported and whose duration was measured: views gained × real retention × real duration. Inputs are real; the product is an estimate and labelled as one — videos without Studio data are not counted as zero. “Take a snapshot now” / “Re-measure their views” above extend these windows by themselves over time.':'No window has a baseline reading yet — every number needs two readings. Use “Take a snapshot now” above; the 24-hour column becomes real a day later, 7-day after a week, 30-day after a month. Nothing is back-filled or estimated in the meantime.')+
   '</div></div>'}
+function histCnd(H){const A=H.auto||{};
+ const st=A.last?('last sampler round '+esc(histT(A.last))+' · '+(A.n||0)+' readings saved, '+(A.errs||0)+' failed')
+   :'first round runs about a minute after the server starts, then every hour';
+ return '<div class="sec">Real-time candles <small> — crypto-style: one candle per bucket, built only from readings this tool actually took; an empty bucket is a gap, never an invented candle</small></div>'+
+ '<div class="card"><div class="bar" style="flex-wrap:wrap">'+
+ '<select id="cmk" aria-label="Metric"><option value="subs">Subscribers</option><option value="views">Views (total of the measured set)</option><option value="ups">Uploads on the channel</option></select>'+
+ '<select id="crg" aria-label="Time window"><option value="24h" selected>Last 24 hours — one candle per hour</option><option value="7d">Last 7 days — one candle per 6 hours</option><option value="30d">Last 30 days — one candle per day</option><option value="all">Everything — one candle per day</option></select>'+
+ '<button class="go sm" onclick="loadCandles()">'+ico("refresh",14)+'Draw candles</button>'+
+ '<span class="sp"></span><span class="sub">auto hourly sampler: <b style="color:var('+(A.on===false?'--bad':'--ok')+')">'+(A.on===false?'off':'on')+'</b> — '+st+'</span></div>'+
+ '<div id="cnd"><div class="sub">Loading candles…</div></div>'+
+ '<div class="sub">A candle’s open/high/low/close are the first/highest/lowest/last <b>actual reading</b> inside that bucket — a bucket with one reading is a flat doji (one real number, not a range), and a bucket with no reading is left empty, because inventing a candle would be a lie. The hourly sampler re-reads every channel that has history: subscribers from the channel page, current views from the YouTube listing (the listing carries view counts — that is a real measurement, not the stored number). Candles for hours before the sampler existed use whatever real readings exist, at whatever spacing they have. Subscriber counts are YouTube-rounded, so flat subscriber candles at small scales are normal. The views candle totals exactly the videos that reading re-read from the listing — videos the listing no longer shows are not carried over from the previous hour.</div></div>'}
+async function loadCandles(){const el=$("#cnd");if(!el)return;
+ const g=$("#crg"),m=$("#cmk");if(!g||!m)return;
+ let r;try{r=await j("/api/hist?id="+encodeURIComponent(cur)+"&candles=1&metric="+m.value+"&range="+g.value)}
+ catch(e){el.innerHTML='<div class="err">Candles failed: '+esc(e.message)+'</div>';return}
+ if(r.err){el.innerHTML='<div class="sub">'+esc(r.err)+'</div>';return}
+ el.innerHTML=cndraw(r)}
+function clab(t,b){const d=new Date(t);
+ if(b>=1440)return esc((d.getMonth()+1)+"-"+d.getDate());
+ return esc(String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"))}
+function cndraw(r){const C=r.candles||[],B=(r.bucket||60)*60000;
+ if(!C.length)return '<div class="sub">'+esc(r.note||"No readings exist for this channel yet — take a snapshot first.")+'</div>';
+ const have=C.filter(c=>c.n>0);
+ if(!have.length)return '<div class="sub">'+esc(r.note||"No real reading falls inside this window.")+'</div>';
+ const W=980,Hh=300,PL=64,PR=14,PT=16,PB=30;
+ const t0=Date.parse(C[0].t),t1=Date.parse(C[C.length-1].t)+B;
+ let lo=Infinity,hi=-Infinity;have.forEach(c=>{lo=Math.min(lo,c.l);hi=Math.max(hi,c.h)});
+ const flat=hi===lo;if(flat){lo=hi-1;hi=hi+1}
+ const X=t=>t1<=t0?PL+(W-PL-PR)/2:PL+(W-PL-PR)*(t-t0)/(t1-t0);
+ const Y=v=>PT+(Hh-PT-PB)*(1-(v-lo)/(hi-lo));
+ const bw=Math.max(2.5,Math.min(18,(W-PL-PR)/Math.max(1,C.length+1)*0.7));
+ let g="";
+ if(flat){const y0=Y(hi);
+  g+='<line x1="'+PL+'" y1="'+y0.toFixed(1)+'" x2="'+(W-PR)+'" y2="'+y0.toFixed(1)+'" stroke="var(--edge)"/>'+
+     '<text x="6" y="'+(y0+3.5).toFixed(1)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">'+fmt(hi)+'</text>'+
+     '<text x="'+(PL+8)+'" y="'+(PT+11)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">every reading in this window has the same value — YouTube’s public counts are rounded, so a real change smaller than that rounding cannot show up</text>'}
+ else for(let q=0;q<=2;q++){const v=lo+(hi-lo)*q/2,y=Y(v);
+  g+='<line x1="'+PL+'" y1="'+y.toFixed(1)+'" x2="'+(W-PR)+'" y2="'+y.toFixed(1)+'" stroke="var(--edge)"/>'+
+     '<text x="6" y="'+(y+3.5).toFixed(1)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">'+fmt(Math.round(v))+'</text>'}
+ let xtk="";const step=Math.max(1,Math.ceil(C.length/8));
+ C.forEach((c,i)=>{if(i%step)return;const x=X(Date.parse(c.t));
+  xtk+='<text x="'+x.toFixed(1)+'" y="'+(Hh-9)+'" text-anchor="middle" style="font-size:var(--fs-micro);fill:var(--mut2)">'+clab(c.t,r.bucket)+'</text>'+
+       '<line x1="'+x.toFixed(1)+'" y1="'+(Hh-PB)+'" x2="'+x.toFixed(1)+'" y2="'+(Hh-PB+3)+'" stroke="var(--edge)"/>'});
+ let cd="";
+ C.forEach(c=>{const xc=X(Date.parse(c.t)+B/2);
+  if(!c.n){cd+='<line x1="'+xc.toFixed(1)+'" y1="'+(Hh-PB-5)+'" x2="'+xc.toFixed(1)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)" stroke-dasharray="2 2"><title>no reading in this bucket — the tool took none; nothing is invented here</title></line>';return}
+  const up=c.c>=c.o,col=up?"var(--ok)":"var(--bad)",
+   y1=Y(Math.max(c.o,c.c)),y2=Y(Math.min(c.o,c.c));
+  cd+='<g style="cursor:crosshair">'+
+   '<line x1="'+xc.toFixed(1)+'" y1="'+Y(c.h).toFixed(1)+'" x2="'+xc.toFixed(1)+'" y2="'+Y(c.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1.4"/>'+
+   '<rect x="'+(xc-bw/2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1.6,y2-y1).toFixed(1)+'" fill="'+(up?"rgba(var(--okrgb),.5)":"rgba(var(--badrgb),.55)")+'" stroke="'+col+'" stroke-width="1"/>'+
+   '<title>'+clab(c.t,r.bucket)+' bucket · open '+fmt(c.o)+' · high '+fmt(c.h)+' · low '+fmt(c.l)+' · close '+fmt(c.c)+' · '+c.n+' real reading'+(c.n>1?'s':'')+'</title></g>'});
+ return '<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="'+esc(r.metric)+' candles over time" style="width:100%;height:auto;display:block">'+
+  g+'<line x1="'+PL+'" y1="'+(Hh-PB)+'" x2="'+(W-PR)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)"/>'+cd+xtk+'</svg>'+
+  (r.note?'<div class="sub" style="margin-top:6px">'+esc(r.note)+'</div>':'')+
+  '<div class="sub" style="margin-top:4px">'+have.length+' candle'+(have.length>1?'s':'')+' drawn from '+r.n_read+' real reading'+(r.n_read>1?'s':'')+' · first reading on record: '+(r.first_read?esc(histT(r.first_read)):"—")+' · hover a candle for its exact values and time</div>'}
 function histRep(H){
  const sn=H.snaps||[],last=sn[sn.length-1]||{},ps=H.pairs||[],pr=ps[ps.length-1];
  let h='<h2>Channel History</h2>'+
@@ -10311,10 +10624,10 @@ function histRep(H){
  const ts=sn.map(x=>x.ts);
  h+='<div class="kpi">'+kpi("snapshots on record",String(H.n),"var(--acc)")+
   kpi("time span",H.span!=null?H.span.toFixed(1)+" days":"one point only",H.span?"var(--acc)":"var(--warn)")+
-  kpi("subscribers now",fmt(last.subs||0),"var(--acc)")+
-  kpi("subscribers Δ since previous",last.d_subs!=null?hdl(last.d_subs):"first point",
+  kpi("subscribers now",last.subs==null?'<span class="sub">page did not answer</span>':fmt(last.subs),"var(--acc)")+
+  kpi("subscribers Δ since previous",last.d_subs!=null?hdl(last.d_subs):(sn.length<2?"first point":"no subs reading"),
       (last.d_subs||0)>0?"var(--ok)":((last.d_subs||0)<0?"var(--bad)":"var(--mut2)"))+
-  kpi("uploads now",fmt((last.tv||0)+(last.tsh||0)),"var(--acc)")+
+  kpi("uploads now",(last.tv==null&&last.tsh==null)?'<span class="sub">listing not read</span>':fmt((last.tv||0)+(last.tsh||0)),"var(--acc)")+
   kpi("uploads Δ",last.d_up!=null?hdl(last.d_up):"first point",(last.d_up||0)>0?"var(--ok)":"var(--mut2)")+
   kpi("videos measured",fmt(last.nm||0),"var(--acc)")+
   kpi("views gained (matched videos)",pr?(pr.dv==null?'<span class="sub">not re-measured</span>':(pr.dv>=0?"+":"")+fmt(pr.dv)):"—",
@@ -10322,7 +10635,7 @@ function histRep(H){
   kpi("matched in both",pr?String(pr.n_match):"—","var(--acc)")+'</div>';
  if(H.n<2)return h+'<div class="sec">What history needs <small> — one reading is a fact, two readings are a trend</small></div>'+
   '<div class="card"><div class="sub">Only one snapshot exists for this channel, taken '+esc(histT(sn[0].ts))+'. Every number in the other panels is real; there is simply nothing to compare it against yet. Two things build the series: <b>“Take a snapshot now”</b> (seconds, gives you subscribers and upload counts over time) and <b>“Re-measure their views”</b> (about a second per video, gives you per-video growth). A channel scan run again later adds a snapshot automatically. Snapshots are stored in <code>thumb_output/hist/</code> and are never overwritten.</div></div>'+histMonth(H);
-   h+=histWindows(H);
+   h+=histWindows(H);h+=histCnd(H);
 h+='<div class="sec">Trend across snapshots <small> — every dot is one real snapshot; nothing between dots is interpolated except the connecting line</small></div>'+
   '<div class="card"><div class="stt">Subscribers</div>'+hchart(sn.map(x=>x.subs),ts,"var(--acc)","subscribers")+
   '<div class="stt" style="margin-top:12px">Uploads on the channel (long-form + Shorts, as listed by YouTube)</div>'+
@@ -10337,9 +10650,9 @@ h+='<div class="sec">Trend across snapshots <small> — every dot is one real sn
   h+='<details class="kdet"><summary>'+ico("clock",14)+'Earlier snapshot pairs ('+(ps.length-1)+')</summary><div class="card">'+old+'</div></details>'}
  h+=histMonth(H);
  let rows=sn.map((x,i)=>'<tr><td>'+esc(histT(x.ts))+'</td><td>'+esc(x.src||"")+(x.vm&&x.vm!==x.ts?' <span class="chip" title="per-video numbers were taken at '+esc(histT(x.vm))+'">measured '+esc(histD(x.vm))+'</span>':'')+
-  '</td><td class="num">'+fmt(x.subs||0)+'</td><td class="num">'+hdl(x.d_subs)+'</td>'+
-  '<td class="num">'+fmt((x.tv||0)+(x.tsh||0))+'</td><td class="num">'+hdl(x.d_up)+'</td>'+
-  '<td class="num">'+fmt(x.nm||0)+'</td><td class="num">'+fmt(x.views||0)+'</td>'+
+  '</td><td class="num">'+(x.subs==null?'<span class="sub" title="the channel page did not answer when this reading was attempted — no subscriber value exists for this moment">page did not answer</span>':fmt(x.subs))+'</td><td class="num">'+hdl(x.d_subs)+'</td>'+
+  '<td class="num">'+(x.tv==null&&x.tsh==null?'<span class="sub" title="the upload listing could not be read at this moment — no count exists for it">listing not read</span>':fmt((x.tv||0)+(x.tsh||0)))+'</td><td class="num">'+hdl(x.d_up)+'</td>'+
+  '<td class="num">'+fmt(x.nm||0)+'</td><td class="num">'+(x.views==null?'<span class="sub" title="no tracked video was re-read from the listing at this moment — there is no views total for it">not measured</span>':fmt(x.views))+'</td>'+
   '<td class="num">'+(x.d_views!=null?hdl(x.d_views):(i===0?'<span class="sub">first</span>':'<span class="sub">not re-measured</span>'))+'</td>'+
   '<td class="num">'+(x.n_match!=null?x.n_match:"—")+'</td></tr>').join("");
  h+='<div class="sec">Snapshot log <small> — every reading ever stored for this channel: '+H.n+'</small></div>'+
@@ -10361,7 +10674,8 @@ async function histv(){const _t=RTN;
  catch(e){if(_t!==RTN)return;$("#main").innerHTML='<h2>Channel History</h2><div class="err">'+esc(e.message)+'</div>';return}
  if(_t!==RTN)return;
  if(H.err){$("#main").innerHTML='<h2>Channel History</h2><div class="err">'+esc(H.err)+'</div>';return}
- $("#main").innerHTML=histRep(H)}
+ $("#main").innerHTML=histRep(H);
+ if((H.n||0)>=1)loadCandles()}
 // ---------- Scan history & rollback (audit trail) ----------
 // Har scan ek immutable snapshot hai — ye view un sab ka record hai: kaab chala, kis
 // par chala, kitni videos naapi gayi. "Restore" ka matlab sirf itna hai ke wahi purana
@@ -13680,6 +13994,11 @@ if __name__ == "__main__":
     # browser khulte hi pehla /api/scans foran jawab de — warna pehli baar me
     # 20+ scans parse hone tak page "Loading…" par atka rehta hai.
     threading.Thread(target=list_scans, daemon=True).start()
+    # Auto-sampler: har ghanta har tracked channel ki ek halki ASLI reading (subs =
+    # About page, views = listing) — history series khud bharsti rehti hai aur
+    # Channel History ka candlestick usi data se banta hai. Server band = readings
+    # band; jitni ghanti tool chala utni hi candles bhari milti hain — sach.
+    threading.Thread(target=_autosnap_loop, daemon=True).start()
     print("pehla jawab ", round(time.perf_counter() - t0, 2), "second me — engines background me tayyar honge")
     # Browser server BIND hone ke BAAD khulta hai (bat file se pehle kholne par
     # browser "refused/loading" dikha kar atak jata tha — ye wahi race thi jo
