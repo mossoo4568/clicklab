@@ -10774,44 +10774,68 @@ function cndraw(r){const C=r.candles||[],B=(r.bucket||60)*60000;
  if(!C.length)return '<div class="sub">'+esc(r.note||"No readings exist for this channel yet — take a snapshot first.")+'</div>';
  const have=C.filter(c=>c.n>0);
  if(!have.length)return '<div class="sub">'+esc(r.note||"No real reading falls inside this window.")+'</div>';
+ // Zoom-to-readings: 24-ghante ki window me sirf 2 ghante ki readings hain to
+ // 22 ghante ka khaali farak candles ko dayein kinare "hawa me" latakata hai.
+ // Jo ghante bilkul khaali hain (reading li hi nahi gayi) wo DRAW nahi karte —
+ // zoom sirf un ghanton tak jahan readings hain (+2 bucket saans). Andar ke
+ // khaali buckets phir bhi gap dikhate hain. CDAT poori window hi rehti hai
+ // taake "gained since previous real reading" zoom ke bahar wali reading se bhi
+ // sahi nikle. Yeh jhoot nahi hai — ye zoom hai, aur neeche likha bhi aata hai.
+ let i0=0,i1=C.length-1,zoomed=false;
+ if(C.length>8){
+  const f=C.indexOf(have[0]),l=C.indexOf(have[have.length-1]);
+  if((l-f+1)/C.length<0.4){i0=Math.max(0,f-2);i1=Math.min(C.length-1,l+2);zoomed=true}}
+ const C2=C.slice(i0,i1+1);
  const W=980,Hh=340,PL=64,PR=14,PT=16,PB=30;
- const t0=Date.parse(C[0].t),t1=Date.parse(C[C.length-1].t)+B;
+ const t0=Date.parse(C2[0].t),t1=Date.parse(C2[C2.length-1].t)+B;
  let lo=Infinity,hi=-Infinity;have.forEach(c=>{lo=Math.min(lo,c.l);hi=Math.max(hi,c.h)});
  // Flat ya tang range: axis ko 5% pad — line beech baithti hai aur axis par
-// asli numbers rehte hain. Ek hi label wala collaps kiya hua scale chart toot-
-// hua lagta hai, bhale data bilkul sach ho.
+ // asli numbers rehte hain. Ek hi label wala collaps kiya hua scale chart toot-
+ // hua lagta hai, bhale data bilkul sach ho.
  const flat=hi===lo,pad=Math.max(1,Math.max(Math.abs(hi),Math.abs(lo))*0.05);
  lo-=pad;hi+=pad;
  const X=t=>t1<=t0?PL+(W-PL-PR)/2:PL+(W-PL-PR)*(t-t0)/(t1-t0);
  const Y=v=>PT+(Hh-PT-PB)*(1-(v-lo)/(hi-lo));
- const bw=Math.max(3,Math.min(16,(W-PL-PR)/Math.max(1,C.length+1)*0.6));
+ const bw=Math.max(3,Math.min(C2.length<=12?26:16,(W-PL-PR)/Math.max(1,C2.length+1)*0.6));
+ // Axis labels: fmt() chhote farq par ek hi label de de (do "2.5K" lines) —
+ // aisa ho to seedhe poore numbers chhapo, taake har gridline ka apna asli
+ // number ho. Numbers invented nahi — gridline ki apni value hai.
+ const gvals=[];for(let q=0;q<=4;q++)gvals.push(Math.round(lo+(hi-lo)*q/4));
+ const dupLbl=new Set(gvals.map(fmt)).size<5;
  let g="";
- for(let q=0;q<=4;q++){const v=lo+(hi-lo)*q/4,y=Y(v);
+ gvals.forEach((v,q)=>{const y=Y(lo+(hi-lo)*q/4);
   g+='<line x1="'+PL+'" y1="'+y.toFixed(1)+'" x2="'+(W-PR)+'" y2="'+y.toFixed(1)+'" stroke="var(--edge)"/>'+
-     '<text x="6" y="'+(y+3.5).toFixed(1)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">'+fmt(Math.round(v))+'</text>'}
+     '<text x="6" y="'+(y+3.5).toFixed(1)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">'+(dupLbl?v.toLocaleString("en-US"):fmt(v))+'</text>'});
  if(flat)g+='<text x="'+(PL+8)+'" y="'+(PT+11)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">every reading in this window has the same value — YouTube’s public counts are rounded, so a real change smaller than that rounding cannot show up</text>';
- let xtk="";const step=Math.max(1,Math.ceil(C.length/8));
- C.forEach((c,i)=>{if(i%step)return;const x=X(Date.parse(c.t));
+ let xtk="";const step=Math.max(1,Math.ceil(C2.length/8));
+ C2.forEach((c,i)=>{if(i%step)return;const x=X(Date.parse(c.t));
   xtk+='<text x="'+x.toFixed(1)+'" y="'+(Hh-9)+'" text-anchor="middle" style="font-size:var(--fs-micro);fill:var(--mut2)">'+clab(c.t,r.bucket)+'</text>'+
        '<line x1="'+x.toFixed(1)+'" y1="'+(Hh-PB)+'" x2="'+x.toFixed(1)+'" y2="'+(Hh-PB+3)+'" stroke="var(--edge)"/>'});
  let cd="";
- C.forEach((c,i)=>{const xc=X(Date.parse(c.t)+B/2);
+ C2.forEach((c,ii)=>{const i=i0+ii,xc=X(Date.parse(c.t)+B/2);
   if(!c.n){cd+='<line x1="'+xc.toFixed(1)+'" y1="'+(Hh-PB-5)+'" x2="'+xc.toFixed(1)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)" stroke-dasharray="2 2"><title>no reading in this bucket — the tool took none; nothing is invented here</title></line>';return}
   const up=c.c>=c.o,col=up?"var(--ok)":"var(--bad)",
    y1=Y(Math.max(c.o,c.c)),y2=Y(Math.min(c.o,c.c));
-  cd+='<g>'+
-   '<line x1="'+xc.toFixed(1)+'" y1="'+Y(c.h).toFixed(1)+'" x2="'+xc.toFixed(1)+'" y2="'+Y(c.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1.4"/>'+
-   '<rect x="'+(xc-bw/2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(2,y2-y1).toFixed(1)+'" fill="'+(up?"rgba(var(--okrgb),.5)":"rgba(var(--badrgb),.55)")+'" stroke="'+col+'" stroke-width="1"/>'+
-   '<title>'+clab(c.t,r.bucket)+' bucket · open '+fmt(c.o)+' · high '+fmt(c.h)+' · low '+fmt(c.l)+' · close '+fmt(c.c)+' · '+c.n+' real reading'+(c.n>1?'s':'')+'</title></g>'});
+  // Flat doji (o=h=l=c — ek hi asli value): patli 2px line dhoondhna mushkil
+  // hota hai, is liye moti visible bar. Value wahi ek asli number hai — bar
+  // ki motai range ka jhoot nahi, sirf dikhane ka tareeka hai.
+  if(c.h===c.l){
+   cd+='<g><rect x="'+(xc-bw/2).toFixed(1)+'" y="'+(Y(c.c)-2.5).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="5" rx="1" fill="'+(up?"rgba(var(--okrgb),.7)":"rgba(var(--badrgb),.75)")+'" stroke="'+col+'" stroke-width="1"/>'+
+    '<title>'+clab(c.t,r.bucket)+' bucket · one value '+fmt(c.c)+' across '+c.n+' real reading'+(c.n>1?'s':'')+' (flat doji — nothing moved between them)</title></g>';return}
+   cd+='<g>'+
+    '<line x1="'+xc.toFixed(1)+'" y1="'+Y(c.h).toFixed(1)+'" x2="'+xc.toFixed(1)+'" y2="'+Y(c.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1.4"/>'+
+    '<rect x="'+(xc-bw/2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(2,y2-y1).toFixed(1)+'" fill="'+(up?"rgba(var(--okrgb),.5)":"rgba(var(--badrgb),.55)")+'" stroke="'+col+'" stroke-width="1"/>'+
+    '<title>'+clab(c.t,r.bucket)+' bucket · open '+fmt(c.o)+' · high '+fmt(c.h)+' · low '+fmt(c.l)+' · close '+fmt(c.c)+' · '+c.n+' real reading'+(c.n>1?'s':'')+'</title></g>'});
  // Poori-height hover columns: bucket ki har jagah cursor le jao to numbers
  // aa jaayein — 2px candle ko theek se nishana lagana user ka kaam nahi.
  let hv="";
- C.forEach((c,i)=>{const xa=X(Date.parse(c.t)),xb=X(Date.parse(c.t)+B);
+ C2.forEach((c,ii)=>{const i=i0+ii,xa=X(Date.parse(c.t)),xb=X(Date.parse(c.t)+B);
   hv+='<rect x="'+xa.toFixed(1)+'" y="'+PT+'" width="'+Math.max(2,xb-xa).toFixed(1)+'" height="'+(Hh-PB-PT)+'" fill="transparent" style="cursor:crosshair" onmousemove="cttTip(event,'+i+')" onmouseleave="cttOff()"></rect>'});
  return '<div style="position:relative">'+
   '<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="'+esc(r.metric)+' candles over time" style="width:100%;height:auto;display:block">'+
   g+'<line x1="'+PL+'" y1="'+(Hh-PB)+'" x2="'+(W-PR)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)"/>'+cd+hv+xtk+'</svg>'+
   '<div id="ctt" style="display:none;position:absolute;z-index:6;pointer-events:none;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r2);padding:7px 9px;font-size:var(--fs-micro);max-width:240px;box-shadow:0 6px 18px rgba(0,0,0,.45)"></div></div>'+
+  (zoomed?'<div class="sub" style="margin-top:6px">Zoomed to '+esc(histT(C2[0].t))+' → '+esc(histT(C2[C2.length-1].t))+' — these are the only hours in this window that have readings. The rest of the window’s hours were never read, so they are not drawn as empty space; ‹ earlier / later › still moves the full window.</div>':'')+
   (r.note?'<div class="sub" style="margin-top:6px">'+esc(r.note)+'</div>':'')+
   '<div class="sub" style="margin-top:4px">'+have.length+' candle'+(have.length>1?'s':'')+' drawn from '+r.n_read+' real reading'+(r.n_read>1?'s':'')+' · first reading on record: '+(r.first_read?esc(histT(r.first_read)):"—")+' · move the cursor anywhere inside a bucket — its real values and time appear on the spot</div>'}
 function histRep(H){

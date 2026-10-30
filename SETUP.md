@@ -365,6 +365,19 @@ nahi) — kam video wali row par "kam bharosa" label ke saath.
   dikhta "chanter" jhoot na lage (wo scope ka farq hai, girawata nahi).
 - **Draw candles** dabate hi "Drawing candles from the real readings on record…"
   dikhta hai — button bekaar nahi lagta.
+- **Zoom-to-readings (agle round ki daanaat ka jawab):** 24-ghante ki window me
+  sirf 2 ghante readings hain to 22 ghante ka khaali farak candles ko chhota sa
+  dash bana kar dayein kinare lataki deta tha. Ab chart sirf un ghanton tak zoom
+  hota hai jahan asli readings hain (plus 2 bucket ki saans), aur neeche saaf
+  likha aata hai ke baaki ghante read hi nahi gaye is liye draw nahi kiye gaye —
+  ‹ earlier / later › poori window hi move karte rehte hain. Zoom ke andar bhi
+  khaali bucket gap hi dikhta hai.
+- **Axis labels asli aur alag-alag:** agar rounding se do gridlines ka label ek
+  jaisa ho raha ho (do "2.5K") to **poore numbers** chhap jaate hain — 2,407 /
+  2,471 / 2,534… — har line ka apna asli number.
+- **Flat doji ab dikhta hai:** jahan saari readings ki value same hai, wahan
+  dhoondhne layak 2px line nahi **moti visible bar** banti hai. Value wahi ek
+  asli number hai; bar ki motai sirf dikhane ka tareeka hai, range ka jhoot nahi.
 
 ### Channel History ki list, re-scan aur chart pichay le jaana — previous pass
 
