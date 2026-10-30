@@ -345,7 +345,28 @@ nahi) — kam video wali row par "kam bharosa" label ke saath.
   server ke ~1 minute baad hai; "Take a snapshot now" se usi waqt ki asli reading
   mil jaati hai, aur "Everything" window purani asli readings dikhata hai.
 
-### Channel History ki list, re-scan aur chart pichay le jaana — latest pass
+### Candle chart fix — numbers axis par, hover poori column par, "is ghante kitne aaye" — latest pass
+
+- **Chart ab chart jaisa dikhta hai:** flat readings wali line chhat se chipki hui
+  nahi **beech baithti**, aur axis par **5 gridlines + asli numbers** hote hain.
+  Flat series par upar chhota note khud likha aata hai ke YouTube ke public counts
+  rounded hain — us rounding se chhota asli farq dikhna mumkin hi nahi. Ye banawat
+  nahi: data wahi ka wahi hai, peshkani theek ki gayi hai.
+- **Hover = poori column:** candle ke 2px ki tangein nishana karne ki zaroorat
+  nahi — bucket ki kisi bhi jagah cursor le jao, uska box aa jata hai.
+- **Box ki pehli line wo number hai jo chahiye:** **"gained since previous real
+  reading: +X"** — pichhi asli reading se is reading tak kitne aaye. Window ke
+  kinare par ye hisaab backend khud bhejta hai. Pehli (ya koi comparable reading
+  na ho) to seedha likha aata hai *"— no comparable earlier reading on record"*.
+- **Do qisam ki readings ka farq nahi ginna:** listing-sampler (~150 videos) aur
+  poori-channel-scan (saare videos) ke totals alag cheezein napte hain. Tool
+  cross-qisam ka "gain" khud reject karta hai aur window me dono qisam mix milne
+  par chart ke neeche **heads-up note** chhapta hai — taake 20 lakh se 2 hazar
+  dikhta "chanter" jhoot na lage (wo scope ka farq hai, girawata nahi).
+- **Draw candles** dabate hi "Drawing candles from the real readings on record…"
+  dikhta hai — button bekaar nahi lagta.
+
+### Channel History ki list, re-scan aur chart pichay le jaana — previous pass
 
 - **Channel History = pehle LIST:** `#/hist` kholte hi un saare channels ki table
   dikhti hai jo kabhi scan/measure hue (naam, readings ki gin, aakhri reading ka

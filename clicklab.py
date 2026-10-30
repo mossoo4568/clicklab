@@ -7717,7 +7717,7 @@ def _hist_candles(sid, metric, rng, back=0):
                 (s.get("tv") or 0) + (s.get("tsh") or 0)
         if v is None:
             continue
-        pts.append((t, int(v)))
+        pts.append((t, int(v), str(s.get("src") or "scan")))
     now = dt.datetime.now()
     if rng == "all":
         back = 0
@@ -7731,15 +7731,42 @@ def _hist_candles(sid, metric, rng, back=0):
     b, out = dt.datetime.fromtimestamp(fb), []
     while b < t_end and len(out) < 400:
         e = b + dt.timedelta(minutes=bucket)
-        inb = [v for t, v in pts if b <= t < e]
+        inb = [(v, src) for t, v, src in pts if b <= t < e]
         if inb:
-            out.append({"t": b.isoformat(timespec="seconds"), "o": inb[0],
-                        "h": max(inb), "l": min(inb), "c": inb[-1], "n": len(inb)})
+            vs = [v for v, s in inb]
+            ks = set(s for v, s in inb)
+            out.append({"t": b.isoformat(timespec="seconds"), "o": vs[0],
+                        "h": max(vs), "l": min(vs), "c": vs[-1], "n": len(vs),
+                        "src": inb[0][1] if len(ks) == 1 else "mixed"})
         else:
             out.append({"t": b.isoformat(timespec="seconds"), "n": 0})
         b = e
     n_read = sum(c.get("n", 0) for c in out)
+    # Window ke PEHLE ki aakhri asli reading: "is ghante kitne aaye" window ke
+    # kinare par bhi sach rahe — farq do asli readings ke beech ka hi rahe.
+    # SCOPE ka shart: dono readings EK HI qisam ki hon (poori-scan vs
+    # listing-only sampler ke totals alag cheez napte — unka farq be-maani hai).
+    prev_c = None; prev_t = None; prev_src = None
+    for t, v, src in pts:
+        if t < t_start:
+            prev_c, prev_t, prev_src = v, t, src
+        else:
+            break
+    first_src = None
+    for t, v, src in pts:
+        if t_start <= t < t_end:
+            first_src = src
+            break
+    if first_src is None or prev_src != first_src:
+        prev_c = None; prev_t = None
+    fams = set(src for t, v, src in pts if t_start <= t < t_end)
     note = ""
+    if metric == "views" and len(fams) > 1:
+        note = ("Heads-up: this window mixes two KINDS of real readings — full-channel "
+                "scans measure every video, the hourly sampler measures only the videos "
+                "YouTube lists (~150). Both totals are real but they measure different "
+                "video sets, so a jump between them is scope, not the channel losing "
+                "views. Gain figures only compare readings of the same kind.")
     if not n_read:
         note = ("No real reading falls inside this window — the candles are empty because "
                 "no reading was taken at these times. Use \u2039 earlier / later \u203a to move "
@@ -7749,6 +7776,8 @@ def _hist_candles(sid, metric, rng, back=0):
             "n_read": n_read, "auto": dict(AUTOSNAP), "note": note, "back": back,
             "t0": t_start.isoformat(timespec="seconds"),
             "t1": t_end.isoformat(timespec="seconds"),
+            "prev_close": prev_c,
+            "prev_t": (prev_t.isoformat(timespec="seconds") if prev_t else ""),
             "first_read": (pts[0][0].isoformat(timespec="seconds") if pts else "")}
 
 
@@ -10688,9 +10717,10 @@ function histCnd(H){const A=H.auto||{};
  '<span id="cwin" class="sub"></span>'+
  '<span class="sp"></span><span class="sub">auto hourly sampler: <b style="color:var('+(A.on===false?'--bad':'--ok')+')">'+(A.on===false?'off':'on')+'</b> — '+st+'</span></div>'+
  '<div id="cnd"><div class="sub">Loading candles…</div></div>'+
- '<div class="sub">A candle’s open/high/low/close are the first/highest/lowest/last <b>actual reading</b> inside that bucket — a bucket with one reading is a flat doji (one real number, not a range), and a bucket with no reading is left empty, because inventing a candle would be a lie. The hourly sampler re-reads every channel that has history: subscribers from the channel page, current views from the YouTube listing (the listing carries view counts — that is a real measurement, not the stored number). Candles for hours before the sampler existed use whatever real readings exist, at whatever spacing they have. Subscriber counts are YouTube-rounded, so flat subscriber candles at small scales are normal. The views candle totals exactly the videos that reading re-read from the listing — videos the listing no longer shows are not carried over from the previous hour. The ‹ earlier / later › buttons move this same window back through time like scrolling a crypto chart — press ‹ (or ‹‹ ×7 to jump seven windows at once) again and again to reach older and older real readings, all the way to the first reading on record; the buttons only stay enabled while real readings can still exist behind the window. The window’s real dates are always shown beside the buttons, and a window with no readings says so instead of drawing anything. Hovering a candle shows its numbers on the spot.</div></div>'}
+ '<div class="sub">A candle’s open/high/low/close are the first/highest/lowest/last <b>actual reading</b> inside that bucket — a bucket with one reading is a flat doji (one real number, not a range), and a bucket with no reading is left empty, because inventing a candle would be a lie. The hourly sampler re-reads every channel that has history: subscribers from the channel page, current views from the YouTube listing (the listing carries view counts — that is a real measurement, not the stored number). Candles for hours before the sampler existed use whatever real readings exist, at whatever spacing they have. Subscriber counts are YouTube-rounded, so flat subscriber candles at small scales are normal. The views candle totals exactly the videos that reading re-read from the listing — videos the listing no longer shows are not carried over from the previous hour. The ‹ earlier / later › buttons move this same window back through time like scrolling a crypto chart — press ‹ (or ‹‹ ×7 to jump seven windows at once) again and again to reach older and older real readings, all the way to the first reading on record; the buttons only stay enabled while real readings can still exist behind the window. The window’s real dates are always shown beside the buttons, and a window with no readings says so instead of drawing anything. Moving the cursor anywhere inside a bucket’s column shows its numbers on the spot — including how much was GAINED since the previous real reading, which is the "kitne aaye is ghante" number.</div></div>'}
 async function loadCandles(){const el=$("#cnd");if(!el)return;
  const g=$("#crg"),m=$("#cmk");if(!g||!m)return;
+ el.innerHTML='<div class="sub">Drawing candles from the real readings on record…</div>';
  let r;try{r=await j("/api/hist?id="+encodeURIComponent(cur)+"&candles=1&metric="+m.value+"&range="+g.value+"&back="+(g.value==="all"?0:(CBK|0)))}
  catch(e){el.innerHTML='<div class="err">Candles failed: '+esc(e.message)+'</div>';return}
  if(r.err){el.innerHTML='<div class="sub">'+esc(r.err)+'</div>';return}
@@ -10714,58 +10744,76 @@ function cwin(r){const e=$("#cwin");if(!e)return;
 function cttShow(ev,html){const t=$("#ctt");if(!t||!t.parentNode)return;const box=t.parentNode;
  t.innerHTML=html;t.style.display="block";
  const r=box.getBoundingClientRect();let x=ev.clientX-r.left+14,y=ev.clientY-r.top+12;
- if(x+210>r.width)x=ev.clientX-r.left-216;if(x<2)x=2;
- if(y+100>r.height)y=ev.clientY-r.top-102;if(y<2)y=2;
+ if(x+250>r.width)x=ev.clientX-r.left-256;if(x<2)x=2;
+ if(y+120>r.height)y=ev.clientY-r.top-124;if(y<2)y=2;
  t.style.left=Math.round(x)+"px";t.style.top=Math.round(y)+"px"}
+// Pehli line wahi number hai jo user poochta hai: "IS ghante me kitne aaye" —
+// pichhi ASLI reading ke close se is candle ke close tak ka farq. Dono taraf
+// asli readings hain, farq bhi asli hai; pehli reading par "—" likha jaata hai.
 function cttTip(ev,i){const c=CDAT[i]||{};
  if(!c.n){cttShow(ev,'<b>'+esc(histT(c.t))+'</b><br>no reading in this bucket — the tool took none. Nothing is invented here.');return}
- const d=c.c-c.o;
- cttShow(ev,'<b>'+esc(histT(c.t))+'</b> · '+c.n+' real reading'+(c.n>1?'s':'')+
-  '<br>open <b>'+fmt(c.o)+'</b> · high <b>'+fmt(c.h)+'</b><br>low <b>'+fmt(c.l)+'</b> · close <b>'+fmt(c.c)+'</b>'+
-  '<br>change in this bucket: <b style="color:'+(d>0?"var(--ok)":(d<0?"var(--bad)":"var(--mut2)"))+'">'+(d>0?"+":"")+fmt(d)+'</b>')}
+ // Farq SIRF usi qisam ki reading se — poori-scan aur listing-sampler totals
+ // alag cheez hain, unka farq be-maani hai (backend bhi yahi shart lagata hai).
+ let prev=null;for(let q=i-1;q>=0;q--){const p=CDAT[q];if(p&&p.n&&p.src===c.src){prev=p;break}}
+ let g0=prev?c.c-prev.c:null,plab="since previous real reading";
+ if(!prev&&typeof CEXT.pc==="number"&&(!c.src||c.src==="auto")){g0=c.c-CEXT.pc;plab="since previous real reading (at "+histT(CEXT.pt)+")"}
+ const d=c.c-c.o,
+  col=v=>v>0?"var(--ok)":(v<0?"var(--bad)":"var(--mut2)");
+ let h='<b>'+esc(histT(c.t))+'</b> · '+c.n+' real reading'+(c.n>1?'s':'')+
+  '<br>gained '+plab+': <b style="color:'+(g0===null?"var(--mut2)":col(g0))+'">'+
+  (g0===null?"— no comparable earlier reading on record":(g0>0?"+":"")+fmt(g0))+'</b>'+
+  (d!==g0?'<br>inside this bucket (close−open): <b style="color:'+col(d)+'">'+(d>0?"+":"")+fmt(d)+'</b>':'')+
+  '<br>open '+fmt(c.o)+' · high '+fmt(c.h)+'<br>low '+fmt(c.l)+' · close '+fmt(c.c);
+ cttShow(ev,h)}
 function cttOff(){const t=$("#ctt");if(t)t.style.display="none"}
 function clab(t,b){const d=new Date(t);
  if(b>=1440)return esc((d.getMonth()+1)+"-"+d.getDate());
  return esc(String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"))}
 function cndraw(r){const C=r.candles||[],B=(r.bucket||60)*60000;
- CDAT=C;
+ CDAT=C;CEXT={pc:(typeof r.prev_close==="number"?r.prev_close:null),pt:r.prev_t||""};
  if(!C.length)return '<div class="sub">'+esc(r.note||"No readings exist for this channel yet — take a snapshot first.")+'</div>';
  const have=C.filter(c=>c.n>0);
  if(!have.length)return '<div class="sub">'+esc(r.note||"No real reading falls inside this window.")+'</div>';
- const W=980,Hh=300,PL=64,PR=14,PT=16,PB=30;
+ const W=980,Hh=340,PL=64,PR=14,PT=16,PB=30;
  const t0=Date.parse(C[0].t),t1=Date.parse(C[C.length-1].t)+B;
  let lo=Infinity,hi=-Infinity;have.forEach(c=>{lo=Math.min(lo,c.l);hi=Math.max(hi,c.h)});
- const flat=hi===lo;if(flat){lo=hi-1;hi=hi+1}
+ // Flat ya tang range: axis ko 5% pad — line beech baithti hai aur axis par
+// asli numbers rehte hain. Ek hi label wala collaps kiya hua scale chart toot-
+// hua lagta hai, bhale data bilkul sach ho.
+ const flat=hi===lo,pad=Math.max(1,Math.max(Math.abs(hi),Math.abs(lo))*0.05);
+ lo-=pad;hi+=pad;
  const X=t=>t1<=t0?PL+(W-PL-PR)/2:PL+(W-PL-PR)*(t-t0)/(t1-t0);
  const Y=v=>PT+(Hh-PT-PB)*(1-(v-lo)/(hi-lo));
- const bw=Math.max(2.5,Math.min(18,(W-PL-PR)/Math.max(1,C.length+1)*0.7));
+ const bw=Math.max(3,Math.min(16,(W-PL-PR)/Math.max(1,C.length+1)*0.6));
  let g="";
- if(flat){const y0=Y(hi);
-  g+='<line x1="'+PL+'" y1="'+y0.toFixed(1)+'" x2="'+(W-PR)+'" y2="'+y0.toFixed(1)+'" stroke="var(--edge)"/>'+
-     '<text x="6" y="'+(y0+3.5).toFixed(1)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">'+fmt(hi)+'</text>'+
-     '<text x="'+(PL+8)+'" y="'+(PT+11)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">every reading in this window has the same value — YouTube’s public counts are rounded, so a real change smaller than that rounding cannot show up</text>'}
- else for(let q=0;q<=2;q++){const v=lo+(hi-lo)*q/2,y=Y(v);
+ for(let q=0;q<=4;q++){const v=lo+(hi-lo)*q/4,y=Y(v);
   g+='<line x1="'+PL+'" y1="'+y.toFixed(1)+'" x2="'+(W-PR)+'" y2="'+y.toFixed(1)+'" stroke="var(--edge)"/>'+
      '<text x="6" y="'+(y+3.5).toFixed(1)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">'+fmt(Math.round(v))+'</text>'}
+ if(flat)g+='<text x="'+(PL+8)+'" y="'+(PT+11)+'" style="font-size:var(--fs-micro);fill:var(--mut2)">every reading in this window has the same value — YouTube’s public counts are rounded, so a real change smaller than that rounding cannot show up</text>';
  let xtk="";const step=Math.max(1,Math.ceil(C.length/8));
  C.forEach((c,i)=>{if(i%step)return;const x=X(Date.parse(c.t));
   xtk+='<text x="'+x.toFixed(1)+'" y="'+(Hh-9)+'" text-anchor="middle" style="font-size:var(--fs-micro);fill:var(--mut2)">'+clab(c.t,r.bucket)+'</text>'+
        '<line x1="'+x.toFixed(1)+'" y1="'+(Hh-PB)+'" x2="'+x.toFixed(1)+'" y2="'+(Hh-PB+3)+'" stroke="var(--edge)"/>'});
  let cd="";
  C.forEach((c,i)=>{const xc=X(Date.parse(c.t)+B/2);
-  if(!c.n){cd+='<line x1="'+xc.toFixed(1)+'" y1="'+(Hh-PB-5)+'" x2="'+xc.toFixed(1)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)" stroke-dasharray="2 2" onmousemove="cttTip(event,'+i+')" onmouseleave="cttOff()"><title>no reading in this bucket — the tool took none; nothing is invented here</title></line>';return}
+  if(!c.n){cd+='<line x1="'+xc.toFixed(1)+'" y1="'+(Hh-PB-5)+'" x2="'+xc.toFixed(1)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)" stroke-dasharray="2 2"><title>no reading in this bucket — the tool took none; nothing is invented here</title></line>';return}
   const up=c.c>=c.o,col=up?"var(--ok)":"var(--bad)",
    y1=Y(Math.max(c.o,c.c)),y2=Y(Math.min(c.o,c.c));
-  cd+='<g style="cursor:crosshair" onmousemove="cttTip(event,'+i+')" onmouseleave="cttOff()">'+
+  cd+='<g>'+
    '<line x1="'+xc.toFixed(1)+'" y1="'+Y(c.h).toFixed(1)+'" x2="'+xc.toFixed(1)+'" y2="'+Y(c.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1.4"/>'+
-   '<rect x="'+(xc-bw/2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1.6,y2-y1).toFixed(1)+'" fill="'+(up?"rgba(var(--okrgb),.5)":"rgba(var(--badrgb),.55)")+'" stroke="'+col+'" stroke-width="1"/>'+
+   '<rect x="'+(xc-bw/2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(2,y2-y1).toFixed(1)+'" fill="'+(up?"rgba(var(--okrgb),.5)":"rgba(var(--badrgb),.55)")+'" stroke="'+col+'" stroke-width="1"/>'+
    '<title>'+clab(c.t,r.bucket)+' bucket · open '+fmt(c.o)+' · high '+fmt(c.h)+' · low '+fmt(c.l)+' · close '+fmt(c.c)+' · '+c.n+' real reading'+(c.n>1?'s':'')+'</title></g>'});
+ // Poori-height hover columns: bucket ki har jagah cursor le jao to numbers
+ // aa jaayein — 2px candle ko theek se nishana lagana user ka kaam nahi.
+ let hv="";
+ C.forEach((c,i)=>{const xa=X(Date.parse(c.t)),xb=X(Date.parse(c.t)+B);
+  hv+='<rect x="'+xa.toFixed(1)+'" y="'+PT+'" width="'+Math.max(2,xb-xa).toFixed(1)+'" height="'+(Hh-PB-PT)+'" fill="transparent" style="cursor:crosshair" onmousemove="cttTip(event,'+i+')" onmouseleave="cttOff()"></rect>'});
  return '<div style="position:relative">'+
   '<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="'+esc(r.metric)+' candles over time" style="width:100%;height:auto;display:block">'+
-  g+'<line x1="'+PL+'" y1="'+(Hh-PB)+'" x2="'+(W-PR)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)"/>'+cd+xtk+'</svg>'+
-  '<div id="ctt" style="display:none;position:absolute;z-index:6;pointer-events:none;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r2);padding:7px 9px;font-size:var(--fs-micro);max-width:210px;box-shadow:0 6px 18px rgba(0,0,0,.45)"></div></div>'+
+  g+'<line x1="'+PL+'" y1="'+(Hh-PB)+'" x2="'+(W-PR)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)"/>'+cd+hv+xtk+'</svg>'+
+  '<div id="ctt" style="display:none;position:absolute;z-index:6;pointer-events:none;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r2);padding:7px 9px;font-size:var(--fs-micro);max-width:240px;box-shadow:0 6px 18px rgba(0,0,0,.45)"></div></div>'+
   (r.note?'<div class="sub" style="margin-top:6px">'+esc(r.note)+'</div>':'')+
-  '<div class="sub" style="margin-top:4px">'+have.length+' candle'+(have.length>1?'s':'')+' drawn from '+r.n_read+' real reading'+(r.n_read>1?'s':'')+' · first reading on record: '+(r.first_read?esc(histT(r.first_read)):"—")+' · hover a candle for its exact values and time</div>'}
+  '<div class="sub" style="margin-top:4px">'+have.length+' candle'+(have.length>1?'s':'')+' drawn from '+r.n_read+' real reading'+(r.n_read>1?'s':'')+' · first reading on record: '+(r.first_read?esc(histT(r.first_read)):"—")+' · move the cursor anywhere inside a bucket — its real values and time appear on the spot</div>'}
 function histRep(H){
  const sn=H.snaps||[],last=sn[sn.length-1]||{},ps=H.pairs||[],pr=ps[ps.length-1];
  let h='<h2>Channel History</h2>'+
@@ -10818,7 +10866,7 @@ h+='<div class="sec">Trend across snapshots <small> — every dot is one real sn
 // Row click → us channel ka poora record (candles, subscribers, har reading).
 // "Re-scan" → us channel ki fresh channel scan (nayi videos fetch + naap), jo
 // khatam hote hi apne aap ek nayi ASLI reading history me likh deti hai.
-let HL=[],HLQ="",CBK=0,CDAT=[];
+let HL=[],HLQ="",CBK=0,CDAT=[],CEXT={};
 async function histList(){const _t=RTN;
  spin("Reading the list of measured channels…");
  let r;try{r=await j("/api/histlist")}catch(e){if(_t!==RTN)return;
