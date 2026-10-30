@@ -5182,6 +5182,20 @@ TREND_REGIONS = {"PK": "Pakistan", "IN": "Bharat", "US": "America (USA)", "GB": 
                  "TR": "Turkey", "DE": "Germany", "FR": "France", "BR": "Brazil",
                  "JP": "Japan", "KR": "Korea", "NG": "Nigeria", "ZA": "South Africa",
                  "ID": "Indonesia", "MY": "Malaysia", "BD": "Bangladesh", "SG": "Singapore"}
+# YouTube Data API ka apna category filter: chart=mostPopular par videoCategoryId
+# bhi chalta hai — yaani "is mulk me is category me kya trending hai" API ka
+# official sawal hai, hamara banaya hua andaaza nahi. Naam YouTube ke apne hain.
+# Category ke andar niche (keyword) filter local hota hai — lafz title/topic-tag/
+# channel-name me milne chahiye (strict, wahi tareeqa jo Niche Finder me hai),
+# aur gin UI par dikhti hai: chart me kitni thin, niche me kitni mili.
+TREND_CATS = {"1": "Film & Animation", "2": "Autos & Vehicles", "10": "Music",
+              "15": "Pets & Animals", "17": "Sports", "19": "Travel & Events",
+              "20": "Gaming", "22": "People & Blogs", "23": "Comedy",
+              "24": "Entertainment", "25": "News & Politics", "26": "Howto & Style",
+              "27": "Education", "28": "Science & Technology",
+              "29": "Nonprofits & Activism", "30": "Movies", "31": "Anime",
+              "32": "Classical", "33": "Dance", "34": "Drama", "35": "Events",
+              "36": "Holidays", "37": "Arts"}
 
 
 def yt_keys():
@@ -5294,15 +5308,20 @@ def _topic_tag(u):
         return ""
 
 
-def yt_trend(region, n):
+def yt_trend(region, n, cat=None):
     """chart=mostPopular = YouTube ka apna trending chart us mulk ke liye. Ek call me
     50 videos tak (1 unit). Views/date/lambai API se aate hain — isliye enrich() ki
-    zaroorat nahi, aur ye numbers YouTube ka apna diya hua official data hai."""
+    zaroorat nahi, aur ye numbers YouTube ka apna diya hua official data hai.
+    cat = videoCategoryId — YouTube ka APNA category filter (is mulk me is category
+    ka chart). Ye API ka official parameter hai, isliye data phir bhi utna hi asli
+    hai; koi filtering hamari taraf se nahi hoti."""
     items, got = [], {}
     tok = None
     while len(items) < n:
         p = {"part": "snippet,statistics,contentDetails,topicDetails", "chart": "mostPopular",
              "regionCode": region, "maxResults": min(50, n - len(items)), "hl": "en"}
+        if cat:
+            p["videoCategoryId"] = str(cat)
         if tok:
             p["pageToken"] = tok
         j = yt_get("videos", p)
@@ -5339,18 +5358,22 @@ def yt_trend(region, n):
         if not tok:
             break
     if not items:
-        return {"error": "chart se ek bhi video nahi mila — region ya quota dekho"}
+        return {"error": "chart se ek bhi video nahi mila — region, category ya quota dekho"}
     return {"items": items, "got": got}
 
 
-def sid_trend(region, n):
-    return hashlib.md5(("trend|" + region + "|" + str(n)).encode()).hexdigest()[:16]
+def sid_trend(region, n, cat="", kw=""):
+    return hashlib.md5(("trend|" + region + "|" + str(n) + "|" + str(cat) + "|" + kw.lower()).encode()).hexdigest()[:16]
 
 
-def start_trend(region, n):
+def start_trend(region, n, cat="", kw=""):
     region = region if region in TREND_REGIONS else "PK"
+    cat = str(cat or "").strip()
+    if cat not in TREND_CATS:
+        cat = ""
+    kw = str(kw or "").strip()[:60]
     n = max(5, min(50, int(n or 25)))
-    sid = sid_trend(region, n)
+    sid = sid_trend(region, n, cat, kw)
     f = SCN_DIR / (sid + ".json")
     if f.exists() and (dt.datetime.now() - dt.datetime.fromtimestamp(f.stat().st_mtime)).total_seconds() < TTL:
         return {"cached": True, "id": sid}
@@ -5360,30 +5383,64 @@ def start_trend(region, n):
                          "Trending ke liye ye free key chahiye (quota 10,000 units/din); baaki poora tool bina key ke chalta hai."}
     jid = hashlib.md5(("trend" + region + str(dt.datetime.now())).encode()).hexdigest()[:10]
     JOBS[jid] = {"state": "run", "done": 0, "total": n, "current": "YouTube ka trending chart maang raha hoon…", "sid": sid}
-    threading.Thread(target=_do_trend, args=(jid, region, n, sid), daemon=True).start()
+    threading.Thread(target=_do_trend, args=(jid, region, n, sid, cat, kw), daemon=True).start()
     return {"job": jid, "id": sid}
 
 
-def _do_trend(jid, region, n, sid):
+def _do_trend(jid, region, n, sid, cat="", kw=""):
     job = JOBS[jid]
     try:
-        r = yt_trend(region, n)
+        r = yt_trend(region, n, cat or None)
         if r.get("error"):
             job["state"] = "error"
             job["error"] = r["error"]
             return
         items, got = r["items"], r["got"]
+        chart_n = len(items)
+        job["current"] = "%d videos chart se aaye (official Data API)" % chart_n
+        # Niche filter (optional): lafz title / official topic tag / channel ke naam me
+        # milne chahiye — strict, koi fuzzy nahi. Ye filter YouTube ke chart PAR chalta
+        # hai: pehle poora chart (official), phir usme se sirf niche wali videos. Gin
+        # screen par dikhti hain — kitni chart me thin, kitni match huin.
+        if kw:
+            toks = _q_tokens(kw)
+            if toks:
+                keep, seen = [], set()
+                for it in items:
+                    blob = ((it.get("title") or "") + " " + (it.get("chan") or "") + " " +
+                            " ".join(it.get("tq") or [])).lower()
+                    if any(w in blob for w in toks):
+                        keep.append(it)
+                        seen.add(it["id"])
+                got = {k: v for k, v in got.items() if k in seen}
+                if not keep:
+                    job["state"] = "error"
+                    job["error"] = ("is chart me %d videos thin — kisi me \"%s\" ke lafz nahi mile. "
+                                   "Ye jhooth nahi, ye is baat ka saboot hai ke aapka niche abhi is mulk%s ke "
+                                   "official chart me nahi hai. Poora chart dekhne ke liye niche khali chhod kar "
+                                   "scan karo, ya lafz chhote/badla kar dobara try karo." %
+                                   (chart_n, kw, (" (" + TREND_CATS[cat] + ")" if cat else "")))
+                    return
+                items = keep
         job["total"] = len(items)
-        job["current"] = "%d videos chart se liye (official Data API)" % len(items)
+        job["current"] = "%d videos naapne jaate hain (chart me se %d thi, niche se %d mili)" % (
+            len(items), chart_n, len(items))
         job["done"] = 0
-        job["filt"] = {"chart_se_aaye": len(items), "source": "YouTube Data API chart=mostPopular"}
+        job["filt"] = {"chart_se_aaye": chart_n, "source": "YouTube Data API chart=mostPopular"}
+        if cat:
+            job["filt"]["category"] = TREND_CATS[cat]
+        if kw:
+            job["filt"]["niche_kw"] = kw
+            job["filt"]["niche_match"] = len(items)
         THUMB_DIR.mkdir(parents=True, exist_ok=True)
         descs = {}
         CAL = load_cal()
         # wahi poora naap jo topic/channel scan chalate hain — do raste nahi. Trend ka
         # topic label jaan-boojh kar "TRENDING" rakha hai taaki "topic match" naap ka
         # matlab saaf rahe (yahan ye chart ke against hai, search topic ke against nahi).
-        topic = "TRENDING " + TREND_REGIONS[region] + " — YouTube ka apna chart"
+        topic = "TRENDING " + TREND_REGIONS[region] + \
+                (" · " + TREND_CATS[cat] if cat else "") + \
+                (" · niche: " + kw if kw else "") + " — YouTube ka apna chart"
         items = measure_items(items, topic, got, job, descs, CAL, True)
         items.sort(key=lambda i: -(i.get("views") or 0))
         SCN_DIR.mkdir(parents=True, exist_ok=True)
@@ -5393,6 +5450,8 @@ def _do_trend(jid, region, n, sid):
                 "w": CAL.get("w"), "src": CAL.get("src")} if CAL else None
         data = {"id": sid, "topic": topic, "n": n, "wide": False, "meta": True,
                 "trend": {"region": region, "name": TREND_REGIONS[region],
+                          "cat": cat or "", "catname": TREND_CATS.get(cat, ""),
+                          "kw": kw, "chart_n": chart_n, "match_n": len(items),
                           "src": "YouTube Data API v3, chart=mostPopular (official chart)"},
                 "ts": dt.datetime.now().isoformat(timespec="seconds"),
                 "ocr": bool(find_tesseract()), "pillow": bool(Image), "cv": bool(cv2),
@@ -7584,6 +7643,72 @@ def hist_refresh(sid, k=25):
             "elapsed": round(time.perf_counter() - t0, 1), "hist": h}
 
 
+def _hist_windows(sn, sid):
+    """24 ghante / hafta / mahine ka farak — SIRF apni hi snapshots se, koi bahar ka
+    data nahi. Har window me baseline wo reading hoti hai jo window ke START se pehle
+    ki sabse aakhri reading hai — aur uska asli waqt screen par likha jaata hai,
+    taake "24 ghante" ka asli span chupa na rahe. Baseline na mile to cell khaali:
+    doosri reading ke bina farak hota hi nahi, 0 likhna jhoot hota.
+    Watch time ka sach: YouTube watch time sirf channel ke malik ko deta hai (Studio).
+    Is liye ye sirf tab gin'ta hai jab us video ka Studio retention (own.json) aur
+    naapi hui duration maujood ho — formula: views gained × asli retention × asli
+    duration. Inputs sab asli, product isliye "andaza (asli hisson se)" label ke
+    saath dikhta hai, exact Studio report ke taur par nahi."""
+    if not sn:
+        return []
+    last = sn[-1]
+    lt = _iso(last.get("ts"))
+    if lt is None:
+        return []
+    durs, own = {}, own_load()
+    try:
+        d = json.loads((SCN_DIR / (sid + ".json")).read_text(encoding="utf-8"))
+        for it in d.get("items") or []:
+            if it.get("id") and it.get("dur"):
+                durs[it["id"]] = int(it["dur"])
+    except Exception:
+        pass
+    out = []
+    for lab, days in (("24 ghante", 1.0), ("hafta", 7.0), ("mahina", 30.0)):
+        cut = lt - dt.timedelta(days=days)
+        base = None
+        for s in sn[:-1]:
+            t = _iso(s.get("ts"))
+            if t is not None and t <= cut:
+                base = s
+        w = {"label": lab, "days": days, "base": None}
+        if base is not None:
+            w["base"] = base.get("ts")
+            w["gap"] = _gap_days(base.get("ts"), last.get("ts"))
+            w["d_subs"] = (last.get("subs") or 0) - (base.get("subs") or 0)
+            w["d_up"] = ((last.get("tv") or 0) + (last.get("tsh") or 0)) - \
+                        ((base.get("tv") or 0) + (base.get("tsh") or 0))
+            p = _pair(base, last, topn=0)
+            w["vm_same"] = p["vm_same"]
+            w["n_match"] = p["n_match"]
+            w["d_views"] = p["dv"]
+            pv, sv = base.get("vids") or {}, last.get("vids") or {}
+            wt_min, wt_n, wt_have = 0.0, 0, 0
+            if p["dv"] is not None:
+                for k in sv:
+                    a, b = pv.get(k), sv.get(k)
+                    if not a or not b or a.get("v") is None or b.get("v") is None:
+                        continue
+                    o = own.get(k) or {}
+                    ret, dur = o.get("ret"), durs.get(k)
+                    if ret and dur:
+                        g = (b["v"] or 0) - (a["v"] or 0)
+                        wt_min += g * (ret / 100.0) * dur / 60.0
+                        wt_have += 1
+                        if g:
+                            wt_n += 1
+            w["wt_min"] = round(wt_min) if wt_have else None
+            w["wt_n"] = wt_n
+            w["wt_have"] = wt_have
+        out.append(w)
+    return out
+
+
 def hist_get(sid):
     """History ka poora view: har snapshot + usse pichle snapshot ka farak. Per-video
     detail sirf aakhri 3 jodiyon ke liye bheji jaati hai (baaki sirf ginati) — warna
@@ -7629,6 +7754,7 @@ def hist_get(sid):
     return {"cid": cid, "name": h.get("name") or (d.get("ch") or {}).get("name") or "",
             "handle": h.get("handle") or (d.get("ch") or {}).get("handle") or "",
             "scan": sid, "n": len(sn), "span": span, "snaps": rows, "pairs": pairs,
+            "windows": _hist_windows(sn, sid),
             "updated": h.get("updated") or ""}
 
 
@@ -8691,7 +8817,7 @@ class H(BaseHTTPRequestHandler):
                 # ClickLab pehle se chal raha hai ya nahi — koi scan parse nahi hota.
                 return self._send(200, {"ok": True, "app": "clicklab"})
             if u.path == "/api/scans":
-                return self._send(200, {"scans": list_scans(), "yt": bool(yt_key()), "ytn": len(yt_keys()), "trg": TREND_REGIONS})
+                return self._send(200, {"scans": list_scans(), "yt": bool(yt_key()), "ytn": len(yt_keys()), "trg": TREND_REGIONS, "trc": TREND_CATS})
             if u.path == "/api/styles":
                 return self._send(200, styles_get())
             if u.path == "/api/kwfind":
@@ -8736,7 +8862,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, sty_measure(q.get("id") or ""))
             if u.path == "/api/trend":
                 return self._send(200, start_trend((q.get("region") or "PK").strip().upper()[:2],
-                                                   pnum(q.get("n")) or 25))
+                                                   pnum(q.get("n")) or 25,
+                                                   (q.get("cat") or "").strip(),
+                                                   (q.get("kw") or "").strip()))
             if u.path == "/api/reddit":
                 return self._send(200, rd_search((q.get("topic") or "").strip(), pnum(q.get("n")) or 25))
             if u.path == "/api/trends":
@@ -9610,7 +9738,7 @@ details>summary:before{color:var(--acc2)}
 <a class="skip" href="#main">Skip to main content</a>
 <layout><nav id="nav" aria-label="Main navigation"></nav><div class="app"><header id="top"></header><main id="main" tabindex="-1"><div class="spin">Loading…</div></main></div></layout>
 <script>
-let SCANS=[],cur="",D=null,MINE=null,TOPIC="",TITLE="",RG=null,ABTH="",PEND="",TOOLS={},AQ={idea:"",words:"",ref:"",mk:"",res:"",str:null,eng:"rw",meth:"auto"},AIINFO={},AIH=[],AIRES=null,SYS={th:{},w_on:{}},IDEAS=null,IDEAR={},YTOK=false,YTN=0,TRG={PK:"Pakistan"};
+let SCANS=[],cur="",D=null,MINE=null,TOPIC="",TITLE="",RG=null,ABTH="",PEND="",TOOLS={},AQ={idea:"",words:"",ref:"",mk:"",res:"",str:null,eng:"rw",meth:"auto"},AIINFO={},AIH=[],AIRES=null,SYS={th:{},w_on:{}},IDEAS=null,IDEAR={},YTOK=false,YTN=0,TRG={PK:"Pakistan"},TRC={};
 const $=s=>document.querySelector(s);
 const fmt=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"K":Math.round(n||0);
 const esc=s=>(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -10148,6 +10276,32 @@ function histMonth(H){
     '<div class="stscr" style="margin-top:10px"><table><tr><th scope="col">upload month</th><th scope="col" class="num">videos</th><th scope="col" class="num">views today</th><th scope="col" class="num">share of channel</th><th scope="col" class="num">vs previous month</th><th scope="col" class="num">cumulative</th></tr>'+rows+'</table></div>'+
     '<div class="sub">This is <b>not</b> “views gained during that month” — one scan only shows today’s totals per upload cohort; the month-by-month change lives in the readings table above. Read it as: videos published in month X hold Y views as of this scan. The “vs previous month” column compares one upload cohort against the next — it shows which upload months built the channel, not what happened inside a month.</div></div>'}}
  return h}
+// 24 ghante / hafta / mahine ka farak — inhi apni readings ka gin hua hisaab.
+// Har column ka baseline aur uska ASLI span header me likha hai; window se pehle
+// koi reading nahi to cell khaali hai, zero nahi — farak do readings ke bina hota
+// hi nahi. Watch time ka sach: wo YouTube sirf channel ke malik ko deta hai, is
+// liye wo sirf unhi videos ka gin'ta hai jinka Studio retention (own.json) aur
+// naapi hui duration maujood hai — formula views gained × retention × duration.
+function histWindows(H){const ws=H.windows||[];if(!ws.length)return "";
+ const anyB=ws.some(w=>w.base);
+ const th=ws.map(w=>'<th scope="col" class="num">'+esc(w.label)+
+  (w.base?'<br><small>baseline '+esc(histT(w.base))+(w.gap!=null?' · actual span '+histDur(w.gap):'')+'</small>':'<br><small>no reading that far back</small>')+'</th>').join("");
+ const row=(lab,f)=>'<tr><td>'+lab+'</td>'+ws.map(w=>'<td class="num">'+f(w)+'</td>').join("")+'</tr>';
+ let body="";
+ body+=row('Subscribers',w=>!w.base?'<span class="sub">—</span>':hdl(w.d_subs));
+ body+=row('Uploads on the channel',w=>!w.base?'<span class="sub">—</span>':hdl(w.d_up));
+ body+=row('Views gained <small>(videos measured in both readings)</small>',w=>!w.base?'<span class="sub">—</span>':
+   (w.d_views==null?'<span class="sub" title="neither reading re-measured per-video views — use “Re-measure their views” to make this real">not re-measured</span>'
+    :hdl(w.d_views)+'<br><small>'+w.n_match+' matched videos</small>'));
+ body+=row('Watch time <small>(estimate from real inputs — see note)</small>',w=>!w.base?'<span class="sub">—</span>':
+   (w.wt_min==null?'<span class="sub" title="YouTube keeps watch time private to the channel owner; no Studio retention is imported for these videos, so nothing is counted — an estimate would be a guess">— no Studio data</span>'
+    :fmt(w.wt_min)+' min<br><small>from '+w.wt_n+' videos with Studio retention + measured duration</small>'));
+ return '<div class="sec">Last 24 hours · 7 days · 30 days <small> — every number below is the difference between two of this channel’s own readings; nothing is estimated from outside data</small></div>'+
+  '<div class="card"><div class="stt">What actually changed inside each window</div>'+
+  '<div class="stscr"><table><tr><th scope="col">metric</th>'+th+'</tr>'+body+'</table></div>'+
+  '<div class="sub">'+(anyB?
+   'Each window compares the latest reading against the last reading taken <b>before that window started</b>, and the header states that baseline’s real time — if the newest baseline is older than the window, the span shown is the real one. A window with no baseline is left empty: without a second reading there is no difference, and writing 0 would be a lie. Subscriber deltas use YouTube’s public counts, which are <b>rounded</b> (e.g. “1.23M”) — a real change smaller than that rounding cannot show up; that is YouTube’s limit, not a hidden number. Views gained counts only videos measured in both readings — the same rule as the pair tables. Watch time is private to the channel owner (YouTube Studio), so it is computed only for videos whose Studio retention you imported and whose duration was measured: views gained × real retention × real duration. Inputs are real; the product is an estimate and labelled as one — videos without Studio data are not counted as zero. “Take a snapshot now” / “Re-measure their views” above extend these windows by themselves over time.':'No window has a baseline reading yet — every number needs two readings. Use “Take a snapshot now” above; the 24-hour column becomes real a day later, 7-day after a week, 30-day after a month. Nothing is back-filled or estimated in the meantime.')+
+  '</div></div>'}
 function histRep(H){
  const sn=H.snaps||[],last=sn[sn.length-1]||{},ps=H.pairs||[],pr=ps[ps.length-1];
  let h='<h2>Channel History</h2>'+
@@ -10168,7 +10322,8 @@ function histRep(H){
   kpi("matched in both",pr?String(pr.n_match):"—","var(--acc)")+'</div>';
  if(H.n<2)return h+'<div class="sec">What history needs <small> — one reading is a fact, two readings are a trend</small></div>'+
   '<div class="card"><div class="sub">Only one snapshot exists for this channel, taken '+esc(histT(sn[0].ts))+'. Every number in the other panels is real; there is simply nothing to compare it against yet. Two things build the series: <b>“Take a snapshot now”</b> (seconds, gives you subscribers and upload counts over time) and <b>“Re-measure their views”</b> (about a second per video, gives you per-video growth). A channel scan run again later adds a snapshot automatically. Snapshots are stored in <code>thumb_output/hist/</code> and are never overwritten.</div></div>'+histMonth(H);
- h+='<div class="sec">Trend across snapshots <small> — every dot is one real snapshot; nothing between dots is interpolated except the connecting line</small></div>'+
+   h+=histWindows(H);
+h+='<div class="sec">Trend across snapshots <small> — every dot is one real snapshot; nothing between dots is interpolated except the connecting line</small></div>'+
   '<div class="card"><div class="stt">Subscribers</div>'+hchart(sn.map(x=>x.subs),ts,"var(--acc)","subscribers")+
   '<div class="stt" style="margin-top:12px">Uploads on the channel (long-form + Shorts, as listed by YouTube)</div>'+
   hchart(sn.map(x=>(x.tv||0)+(x.tsh||0)),ts,"var(--acc)","uploads")+
@@ -10466,7 +10621,7 @@ async function homev(){const _t=RTN;
 }
 
 
-async function boot(){try{if(localStorage.getItem("cl_nav")==="off")document.body.classList.add("navoff")}catch(e){}const d=await j("/api/scans");SCANS=d.scans;YTOK=d.yt===true;YTN=d.ytn||0;if(d.trg)TRG=d.trg;try{TOOLS=await j("/api/tools")}catch(e){}
+async function boot(){try{if(localStorage.getItem("cl_nav")==="off")document.body.classList.add("navoff")}catch(e){}const d=await j("/api/scans");SCANS=d.scans;YTOK=d.yt===true;YTN=d.ytn||0;if(d.trg)TRG=d.trg;if(d.trc)TRC=d.trc;try{TOOLS=await j("/api/tools")}catch(e){}
  try{SYS=await j("/api/sys")}catch(e){}
  // Engine bhaari hain is liye background me tayyar hote hain — tool foran khulta hai.
  // Jab tak wo aa na jayen status line ka engine naam dobara poocha jaata hai, taake
@@ -10676,15 +10831,16 @@ async function runScan(topic,n,wide,meta){
  $("#main").innerHTML='<div class="err">Bahut lamba — n kam karke dobara.</div>'}
 // Trending scan: wahi progress screen, bas source official chart hai. Result ek normal
 // scan ki tarah hi khulta hai — do raste nahi, warna ek hi cheez ka matlab do hota.
-async function runTrend(){const r=(($("#trg")||{}).value||"PK"),n=parseInt(($("#trn")||{}).value||"25",10);spin();
- let d;try{d=await j("/api/trend?region="+encodeURIComponent(r)+"&n="+n)}catch(e){$("#main").innerHTML='<div class="err">✗ '+esc(e.message)+'</div>';return}
+async function runTrend(){const r=(($("#trg")||{}).value||"PK"),c=(($("#trc")||{}).value||""),kw=(($("#tkw")||{}).value||"").trim().slice(0,60),n=parseInt(($("#trn")||{}).value||"25",10);
+ try{localStorage.setItem("trc",c);localStorage.setItem("tkw",kw)}catch(e){}spin();
+ let d;try{d=await j("/api/trend?region="+encodeURIComponent(r)+"&n="+n+"&cat="+encodeURIComponent(c)+"&kw="+encodeURIComponent(kw))}catch(e){$("#main").innerHTML='<div class="err">✗ '+esc(e.message)+'</div>';return}
  if(d.error){$("#main").innerHTML=trErrBox(d.error);return}
  if(d.cached){await openScan(d.id);return}
  for(let i=0;i<1200;i++){await new Promise(x=>setTimeout(x,1200));let p;try{p=await j("/api/progress?id="+d.job)}catch(e){continue}
   if(p.state==="done"){await openScan(d.id);return}
   if(p.state==="error"){$("#main").innerHTML=trErrBox(p.error||"trend scan fail hua");return}
   const pc=p.total?Math.round(p.done*100/p.total):0;
-  $("#main").innerHTML='<h2>'+ico("trend",18)+' Trending scan — '+esc(TRG[r]||r)+'</h2><div class="sub">'+esc(p.current||"…")+' — '+p.done+"/"+p.total+
+  $("#main").innerHTML='<h2>'+ico("trend",18)+' Trending scan — '+esc(TRG[r]||r)+(c?' · '+esc(TRC[c]||c):"")+(kw?' · niche: '+esc(kw):"")+'</h2><div class="sub">'+esc(p.current||"…")+' — '+p.done+"/"+p.total+
    ' videos · source: YouTube Data API ka apna chart (official)</div><div class="pbar"><i style="width:'+pc+'%"></i></div>'}
  $("#main").innerHTML='<div class="err">Bahut lamba — ruk gaya.</div>'}
 // Trending API ki asli galti jaisi hai waisi dikhti hai; agar quota/403 ka case ho to
@@ -10785,8 +10941,11 @@ function noScan(){
    '<div class="card" style="margin-top:14px"><h3>Trending — YouTube ka apna chart '+(YTOK?(YTN>1?'<span class="hi">✓ pool me '+YTN+' keys — quota khatam hone par agli key apne aap</span>':'<span class="hi">✓ key set hai</span>'):'<span class="lo">key set nahi — ye abhi kaam nahi karega</span>')+'</h3>'+
    '<div class="sub">Ye search ka ulta hai: hum poochhte nahi ke "is topic me kaun hai", balki YouTube ka <b>apna chart</b> lete hain ke aaj us mulk me algorithm ne kin videos ko upar rakha hai. Naap (thumbnail, OCR, score, Deep Analysis) bilkul wahi chalta hai jo topic scan par — farak sirf videos ka source hai, aur wo source <b>official YouTube Data API</b> hai: views, date, lambai sab YouTube ka diya hua data, koi scraping andaaza nahi. Free quota 10,000 units/day aur ek trending scan = <b>1 unit</b> — bartan ki bhatti nahi, chammach.</div>'+
    '<div class="bar"><select id="trg">'+Object.keys(TRG).map(k=>'<option value="'+k+'">'+esc(TRG[k])+' ('+k+')</option>').join("")+'</select>'+
+   '<select id="trc"><option value="">saari categories (poora chart)</option>'+Object.keys(TRC).map(k=>'<option value="'+k+'"'+((function(){try{return localStorage.getItem("trc")}catch(e){return""}})()==k?' selected':'')+'>'+esc(TRC[k])+'</option>').join("")+'</select>'+
+   '<input type="text" id="tkw" value="'+esc((function(){try{return localStorage.getItem("tkw")||""}catch(e){return""}})())+'" placeholder="niche ka lafz (optional) — sirf matching chart videos" style="min-width:280px" onkeydown="if(event.key===\'Enter\')runTrend()">'+
    '<select id="trn">'+[10,25,50].map(v=>'<option value="'+v+'"'+(v===25?" selected":"")+'>'+v+' videos</option>').join("")+'</select>'+
    '<button class="go" onclick="runTrend()">Trending scan karo</button></div>'+
+   '<div class="sub"><b>Niche filter ka sach:</b> category ka filter <b>YouTube ka apna parameter hai</b> (videoCategoryId) — yaani "is mulk me is category ka chart" API ka official sawal hai, hamari banayi hui filtering nahi. Niche ka lafz us <b>chart ke andar</b> lagta hai: lafz title / official topic tag / channel ke naam me mile tabhi video rehti hai — strict, koi fuzzy milan nahi. Gin screen par dikhti hai: chart me kitni videos thin, niche me kitni mili. 0 mili to ye <b>natija</b> hai, khami nahi: matlab aapka niche abhi us mulk ke chart me nahi hai. Qabool kiya hua niche browser me yaad rehta hai.</div>'+
     '<div class="bar"><textarea id="yk" rows="3" spellcheck="false" placeholder="YouTube Data API keys − ek line me ek key. 11 keys bhi ek saath paste kar do: pool me add ho jaayengi (duplicate apne aap chhoot jaayengi), aur ek key ka din ka quota (10,000 units) khatam ho to tool apne aap agli key laga deta hai" style="min-width:420px;min-height:64px;font-family:var(--mono);font-size:12px"></textarea><button class="sm" onclick="ytKey()">pool me add karo</button>'+(YTOK?'<button class="sm gh" onclick="ytKey(1)">pool hatao</button>':"")+'</div>'+
     (YTOK&&YTN>1?'<div class="sub">Pool me abhi '+YTN+' keys hain − har key ka apna alag daily quota hota hai, isliye pool jitni keys, utna zyada din ka quota. Tool ye nahi jaanta key kis account ki hai; bas ek khatam hone par agli line apne aap lag jaati hai.</div>':"")+
    '<div class="sub"><b>Sach jo jaanna zaroori hai:</b> trending chart algorithm ka push hai — poore mulk ka aaj ka mood, aapke topic ka benchmark nahi. Is scan ka "topic match" number chart ke against hai isliye usse zyada mat tollo; views/day, thumbnails ke naap aur Deep Analysis hi asli kaam hain. Chart ki videos par YouTube ke <b>official topic tags</b> (Wikipedia entities) bhi aate hain — item card par "topic tag (official)" me dikhte hain, aur wo YouTube ka label hai hamara andaaza nahi. Key free tier par bhi chahiye, kyunki quota aapke Google account se juda hota hai.</div></div>'}

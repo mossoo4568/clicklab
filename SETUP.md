@@ -73,7 +73,12 @@ ki cheezein chaar hisson me hain:
    hain, koi nakli kaam nahi):**
    - **YouTube Data API v3** — "Trending" scan (YouTube ka APNA official chart, ek
      scan = 1 unit, free quota 10,000 units/day) aur usme videos ke **official topic
-     tags**. Key: `YT_API_KEY` env, `youtube_key.txt`, ya Trending card ka box.
+     tags**. Trending me **category filter bhi API ka apna parameter hai**
+     (`chart=mostPopular` + `videoCategoryId`) — "is mulk me is category ka chart"
+     ka sawal seedha YouTube se hota hai. **Niche ka lafz** us chart ke *andar*
+     local filter hai (0 units, strict word-match, ginti screen par:
+     `chart_se_aaye` vs `niche_match`; 0 match = honest natija, error message).
+     API: `/api/trend?region=&n=&cat=&kw=`. Key: `YT_API_KEY` env, `youtube_key.txt`, ya Trending card ka box.
      **Live verified (key ke saath):** Pakistan ka official chart (GTA VI, Sidhu
      Moose Wala, Marvel), API ke views/lambai, aur har video ke official topic tags
      — sab aaye; poora naap engine unhi par chala.)
