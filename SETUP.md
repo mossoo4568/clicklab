@@ -345,6 +345,29 @@ nahi) — kam video wali row par "kam bharosa" label ke saath.
   server ke ~1 minute baad hai; "Take a snapshot now" se usi waqt ki asli reading
   mil jaati hai, aur "Everything" window purani asli readings dikhata hai.
 
+### Channel History ki list, re-scan aur chart pichay le jaana — latest pass
+
+- **Channel History = pehle LIST:** `#/hist` kholte hi un saare channels ki table
+  dikhti hai jo kabhi scan/measure hue (naam, readings ki gin, aakhri reading ka
+  waqt, subs) — upar naam ka filter bhi. Jo channel sirf measure hua hai (uski scan
+  file delete bhi ho gayi ho) wo bhi list me aata hai; uska record khul sakta hai,
+  sirf "Scan JSON" ka link nahi milta.
+- **"Open record"** par us channel ka poora record: candlestick card, har subscriber
+  reading, saare snapshots — aur wahin **"Re-scan channel — fetch new videos"**: ye
+  us channel ki poori nayi scan chalata hai (naye videos + fresh subscribers), aur
+  poori hote hi history me nayi reading pka jaati hai — candles me dikhne lagti hai.
+  Chhote channel par ~1 minute, bade par kuch minute (job progress bar ke saath).
+- **Candle par cursor = forr numbers:** har candle/dashed-gap par mouse le jaao to
+  chhota box time, readings ki gin aur open/high/low/close dikhta hai; gap par
+  likha aata hai ke us bucket me koi reading li hi nahi gayi.
+- **Chart ko pichay le jaana (crypto chart jaisa):** "‹ earlier" ek window peeche,
+  "‹‹ ×7" saat windows ek saath; bar me window ki **asli tareekh** likhi hoti hai.
+  Button apne aap band ho jaate hain jab peechay koi asli reading possible nahi
+  (yaani pehli reading se aage) — andhere me andhi chapaq nahi.
+- **Note:** readings wahi tak hain jab tak **tool chalta raha** (server band =
+  sampler band). "Everything" window me pan ki koi zaroorat nahi — wo shuru se
+  poori series bana deta hai.
+
 ## Troubleshooting
 
 - `yt-dlp not found` — matlab `pip install yt-dlp` skip hua. Wo lagao, phir tool restart.

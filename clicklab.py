@@ -7461,7 +7461,20 @@ def hist_take(sid):
     (~1 minute)."""
     f = SCN_DIR / (sid + ".json")
     if not f.exists():
-        return {"err": "wo scan file nahi mili"}
+        if not _hist_path(sid).exists():
+            return {"err": "wo scan file nahi mili"}
+        # scan file delete ho chuki — history file me saved URL se ASLI reading lo.
+        # Per-video numbers is reading me nahi ho sakte (scan items mehfooz hi nahi):
+        # poora record chahiye to "Re-scan channel" se nayi scan banwayein.
+        t0 = time.perf_counter()
+        r = _hist_auto("", sid)
+        if not r.get("ok"):
+            return {"err": r.get("err") or "reading nahi ho saki"}
+        h = _hist_load(sid)
+        return {"ok": True, "cid": sid, "n": len(h["snaps"]),
+                "got": {"subs": bool(r.get("subs")), "list": "none",
+                        "terr": "no scan items on record — subscribers and upload counts were read fresh; per-video numbers need a Re-scan"},
+                "elapsed": round(time.perf_counter() - t0, 1)}
     d = json.loads(f.read_text(encoding="utf-8"))
     if d.get("kind") != "channel":
         return {"err": "ye channel scan nahi hai — history sirf channel scans ke liye hai"}
@@ -7663,28 +7676,25 @@ def _autosnap_loop():
         time.sleep(max(5, int(AUTOSNAP.get("mins") or 60)) * 60)
 
 
-def _hist_candles(sid, metric, rng):
+def _hist_candles(sid, metric, rng, back=0):
     """Candlestick (crypto-jaisa) SIRF apni asli readings se: har bucket ka
     o/h/l/c = us bucket me padi ASLI readings ka pehla/zyada/kam/aakhri value.
     Bucket khaali → koi candle nahi, gap — reading hi nahi li gayi to candle
     banana banawat hoti. Ek hi reading → doji (ek asli number, range nahi).
-    rng: 24h → 1-ghanti candles, 7d → 6-ghante, 30d/all → roz."""
-    f = SCN_DIR / (sid + ".json")
-    if not f.exists():
-        return {"err": "wo scan file nahi mili"}
-    try:
-        d = json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
-        return {"err": "scan file padhi nahi ja saki"}
-    cid = (d.get("ch") or {}).get("id") or ""
+    rng: 24h → 1-ghanti candles, 7d → 6-ghante, 30d/all → roz.
+    back: window ko kitni windows PEENE le jao (crypto chart jaisa pan) —
+    back=1 matlab usi size ki window pichle period ki. Sidha pan: window
+    [ab-back*dur, ab-(back+1)... nahi — [ab-(back+1)*dur, ab-back*dur]."""
+    cid = _hist_cid(sid)
     if not cid:
-        return {"err": "is scan me channel ki id nahi hai"}
+        return {"err": "wo scan file nahi mili"}
     if metric not in ("subs", "views", "ups"):
         metric = "subs"
     BK = {"24h": 60, "7d": 360, "30d": 1440, "all": 1440}
     if rng not in BK:
         rng = "24h"
     bucket = BK[rng]
+    back = max(0, int(back or 0))
     h = _hist_load(cid)
     sn = sorted(h["snaps"], key=lambda x: str(x.get("ts") or ""))
     pts = []
@@ -7710,13 +7720,16 @@ def _hist_candles(sid, metric, rng):
         pts.append((t, int(v)))
     now = dt.datetime.now()
     if rng == "all":
+        back = 0
         t_start = pts[0][0] if pts else now
+        t_end = now
     else:
         hrs = {"24h": 24, "7d": 168, "30d": 720}[rng]
-        t_start = max(now - dt.timedelta(hours=hrs), pts[0][0] if pts else now)
+        t_end = now - dt.timedelta(hours=hrs * back)
+        t_start = t_end - dt.timedelta(hours=hrs)
     fb = int(t_start.timestamp() // (bucket * 60)) * (bucket * 60)
     b, out = dt.datetime.fromtimestamp(fb), []
-    while b < now and len(out) < 400:
+    while b < t_end and len(out) < 400:
         e = b + dt.timedelta(minutes=bucket)
         inb = [v for t, v in pts if b <= t < e]
         if inb:
@@ -7729,11 +7742,13 @@ def _hist_candles(sid, metric, rng):
     note = ""
     if not n_read:
         note = ("No real reading falls inside this window — the candles are empty because "
-                "no reading was taken at these times. The hourly sampler fills these "
-                "gaps as it runs; a wider range shows older real readings, and "
-                "\u201cTake a snapshot now\u201d reads the channel this second.")
+                "no reading was taken at these times. Use \u2039 earlier / later \u203a to move "
+                "this window to dates that do have readings, pick a wider range, or press "
+                "\u201cTake a snapshot now\u201d to read the channel this second.")
     return {"metric": metric, "range": rng, "bucket": bucket, "candles": out,
-            "n_read": n_read, "auto": dict(AUTOSNAP), "note": note,
+            "n_read": n_read, "auto": dict(AUTOSNAP), "note": note, "back": back,
+            "t0": t_start.isoformat(timespec="seconds"),
+            "t1": t_end.isoformat(timespec="seconds"),
             "first_read": (pts[0][0].isoformat(timespec="seconds") if pts else "")}
 
 
@@ -7810,6 +7825,8 @@ def hist_refresh(sid, k=25):
     medians) inhi nayi values par chalta hai."""
     f = SCN_DIR / (sid + ".json")
     if not f.exists():
+        if _hist_path(sid).exists():
+            return {"err": "is channel ki scan file ab yahan nahi — \u201cRe-scan channel\u201d se pehle nayi scan banayein, phir per-video dobara-naap kaam karega"}
         return {"err": "wo scan file nahi mili"}
     d = json.loads(f.read_text(encoding="utf-8"))
     if d.get("kind") != "channel":
@@ -7958,19 +7975,97 @@ def _hist_windows(sn, sid):
     return out
 
 
+def _hist_cid(k):
+    """k = scan id ya channel id — dono se channel id nikal do. Scan file zinda ho to
+    uska cid; delete ho chuki ho to khud cid (history file ka naam hi cid hai)."""
+    if not k:
+        return ""
+    f = SCN_DIR / (k + ".json")
+    if f.exists():
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            if d.get("kind") == "channel":
+                return (d.get("ch") or {}).get("id") or ""
+        except Exception:
+            return ""
+        return ""
+    if _hist_path(k).exists():
+        return k
+    return ""
+
+
+def hist_channels():
+    """Channel History ki list: har channel jo is tool ne kabhi scan ya naap kiya —
+    hist files (napay gaye) aur channel scan files (scan hue) ka merged record.
+    Jo reading nahi hui uski jagah None/zero — koi banawat nahi."""
+    m = {}
+    if HIST_DIR.exists():
+        for f in HIST_DIR.glob("*.json"):
+            try:
+                h = _hist_load(f.stem)
+            except Exception:
+                continue
+            sn = sorted(h.get("snaps") or [], key=lambda x: str(x.get("ts") or ""))
+            last = sn[-1] if sn else {}
+            m[f.stem] = {"cid": f.stem, "name": h.get("name") or "",
+                         "handle": h.get("handle") or "", "url": h.get("url") or "",
+                         "n": len(sn), "last": last.get("ts") or "",
+                         "subs": last.get("subs"), "sid": "", "scans": 0,
+                         "act": str(last.get("ts") or "")}
+    if SCN_DIR.exists():
+        for f in SCN_DIR.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if d.get("kind") != "channel":
+                continue
+            ch = d.get("ch") or {}
+            cid = ch.get("id") or ""
+            if not cid:
+                continue
+            ts = str(d.get("ts2") or d.get("ts") or "")
+            r = m.get(cid)
+            if r is None:
+                r = m[cid] = {"cid": cid, "name": ch.get("name") or "",
+                              "handle": ch.get("handle") or "", "url": ch.get("url") or "",
+                              "n": 0, "last": "", "subs": None, "sid": "", "scans": 0,
+                              "act": ts}
+            for k in ("name", "handle", "url"):
+                if not r.get(k):
+                    r[k] = ch.get(k) or ""
+            if r["subs"] is None and ch.get("subs") is not None and not r["n"]:
+                r["subs"] = ch.get("subs")   # abhi koi reading nahi — scan ka apna subs hi dikhao
+            r["scans"] += 1
+            if not r["sid"] or ts >= str(m[cid].get("_ts", "")):
+                r["sid"] = f.stem            # sabse nayi scan ka id — "Open latest scan" ke liye
+                r["_ts"] = ts
+            r["act"] = max(r["act"], ts)
+    for r in m.values():
+        r.pop("_ts", None)
+    out = sorted(m.values(), key=lambda r: str(r.get("act") or ""), reverse=True)
+    return {"channels": out, "auto": dict(AUTOSNAP)}
+
+
 def hist_get(sid):
     """History ka poora view: har snapshot + usse pichle snapshot ka farak. Per-video
     detail sirf aakhri 3 jodiyon ke liye bheji jaati hai (baaki sirf ginati) — warna
-    response me sirf ginati hoti hai aur client ke paas poora data chala jaata hai."""
+    response me sirf ginati hoti hai aur client ke paas poora data chala jaata hai.
+    id = scan id ya channel id: scan file delete ho chuki ho to history file ka apna
+    naam/URL kaafi hai — readings wahi mehfooz hain."""
     f = SCN_DIR / (sid + ".json")
-    if not f.exists():
+    d = None
+    if f.exists():
+        d = json.loads(f.read_text(encoding="utf-8"))
+        if d.get("kind") != "channel":
+            return {"err": "ye channel scan nahi hai"}
+        cid = (d.get("ch") or {}).get("id") or ""
+        if not cid:
+            return {"err": "is scan me channel ki id nahi hai"}
+    elif _hist_path(sid).exists():
+        cid = sid
+    else:
         return {"err": "wo scan file nahi mili"}
-    d = json.loads(f.read_text(encoding="utf-8"))
-    if d.get("kind") != "channel":
-        return {"err": "ye channel scan nahi hai"}
-    cid = (d.get("ch") or {}).get("id") or ""
-    if not cid:
-        return {"err": "is scan me channel ki id nahi hai"}
     hist_ensure(cid)
     h = _hist_load(cid)
     sn = sorted(h["snaps"], key=lambda x: str(x.get("ts") or ""))
@@ -8002,10 +8097,13 @@ def hist_get(sid):
     for i in range(max(1, len(sn) - 3), len(sn)):
         pairs.append(_pair(sn[i - 1], sn[i]))
     span = _gap_days(sn[0].get("ts"), sn[-1].get("ts")) if len(sn) > 1 else None
-    return {"cid": cid, "name": h.get("name") or (d.get("ch") or {}).get("name") or "",
-            "handle": h.get("handle") or (d.get("ch") or {}).get("handle") or "",
-            "scan": sid, "n": len(sn), "span": span, "snaps": rows, "pairs": pairs,
-            "windows": _hist_windows(sn, sid),
+    chd = (d or {}).get("ch") or {}
+    return {"cid": cid, "name": h.get("name") or chd.get("name") or "",
+            "handle": h.get("handle") or chd.get("handle") or "",
+            "url": chd.get("url") or h.get("url") or "",
+            "scan": sid if d else "", "n": len(sn), "span": span, "snaps": rows,
+            "pairs": pairs,
+            "windows": _hist_windows(sn, sid if d else ""),
             "auto": dict(AUTOSNAP),
             "updated": h.get("updated") or ""}
 
@@ -9140,11 +9238,16 @@ class H(BaseHTTPRequestHandler):
                 # scan file (wahi engine jo topic scan ke liye chalta hai). Job banata hai.
                 n = max(5, min(CHN_MAX, pnum(q.get("n")) or CHN_DEF))
                 return self._send(200, start_chan(q.get("q") or q.get("url") or "", n))
+            if u.path == "/api/histlist":
+                # Channel History ki list: jo channels kabhi scan/napay gaye —
+                # Scan History jaisa record, banawat ka ek number bhi nahi.
+                return self._send(200, hist_channels())
             if u.path == "/api/hist":
                 sid = q.get("id") or ""
                 if q.get("candles"):
                     return self._send(200, _hist_candles(sid, q.get("metric") or "subs",
-                                                         q.get("range") or "24h"))
+                                                         q.get("range") or "24h",
+                                                         pnum(q.get("back")) or 0))
                 if pnum(q.get("take")):
                     r = hist_take(sid)
                     if r.get("ok"):
@@ -10312,8 +10415,11 @@ function nav(){
  const nc=$("#navc");if(nc)nc.onclick=navTog;
  $("#csel").onchange=e=>{cur=e.target.value;D=null;IDEAS=null;go("ch")};
  $("#sel").onchange=e=>{cur=e.target.value;D=null;IDEAS=null;go("cmp")};
- document.querySelectorAll("nav a[data-v]").forEach(a=>{a.onclick=()=>go(a.dataset.v);
-  a.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go(a.dataset.v)}}});
+ // Channel History nav par hamesha pehle LIST khulta hai (jo channels napaye gaye —
+ // Scan History jaisa record); channel ka record row click se khulta hai.
+ const navgo=v=>{if(v==="hist"){cur="";D=null}go(v)};
+ document.querySelectorAll("nav a[data-v]").forEach(a=>{a.onclick=()=>navgo(a.dataset.v);
+  a.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();navgo(a.dataset.v)}}});
 }
 // Side menu chhupane/dikhane ka toggle — Ctrl+B se bhi. Choice localStorage me rehti hai,
 // agle session me wahi state rehti hai. Chhupane par poora viewport content ko milta hai.
@@ -10347,6 +10453,12 @@ function setHash(){const h="#/"+view+(cur?"/"+cur:"");if(location.hash===h)retur
 function fromHash(){const p=(location.hash||"").replace(/^#\/?/,"").split("/").filter(Boolean);
  if(p.length&&VW[p[0]])view=p[0];
  if(p[1]&&SCANS.some(x=>x.id===p[1]&&x.kind!=="niche")){if(p[1]!==cur){cur=p[1];D=null}}
+ // History view channel id se bhi khulta hai (scan file delete ho chuki ho to bhi
+ // readings history file me mehfooz rehti hain) — UC… YouTube ka channel id hai.
+ else if(view==="hist"&&p[1]&&/^UC[\w-]{20,24}$/.test(p[1])){if(p[1]!==cur){cur=p[1];D=null}}
+ // #/hist akele = list khuli hai (koi channel nahi chuna) — boot() ne cur bhar
+ // diya tha to yahan wapas khaali karo, warna list kabhi nahi dikhegi.
+ else if(view==="hist"&&!p[1]){if(cur){cur="";D=null}}
  if(!p.length){const t0=SCANS.filter(x=>x.kind!=="niche")[0];if(!SCANS.some(x=>x.id===cur))cur=t0?t0.id:""}}
 // RTN: har render ka token. Jo view async kaam karke baad me #main likhta hai, wo
 // pehle check karta hai ke ye abhi bhi wahi render hai — warna purana view naye view
@@ -10431,22 +10543,25 @@ function hchart(vals,ts,cl,lab){
  if(N>1)xl+='<text x="'+(W-PR)+'" y="'+(Hh-7)+'" text-anchor="end" style="font-size:var(--fs-micro);fill:var(--mut2)">'+esc(histD(ts[N-1]))+'</text>';
  return '<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="'+esc(lab)+' over time" style="width:100%;height:auto;display:block">'+
   area+line+g+dots+xl+'</svg>'}
-function histBar(){
+function histBar(H){H=H||{};
  return '<div class="card"><div class="bar" style="flex-wrap:wrap">'+
   '<button class="go sm" onclick="histTake()">'+ico("refresh",14)+'Take a snapshot now</button>'+
+  '<button class="go sm" '+(H.url?'':'disabled title="no channel URL is stored for this channel"')+' onclick="histRescan(\''+esc(H.cid||"")+'\',\''+esc(H.url||"")+'\',this)">'+ico("down",14)+'Re-scan channel — fetch new videos</button>'+
+  (H.scan?'<button class="sm" onclick="histGoScan(\''+esc(H.scan)+'\')">'+ico("eye",14)+'Open its latest scan</button>':'')+
   '<select id="hknum" aria-label="How many recent videos to re-measure">'+
    '<option value="10">10 recent videos</option><option value="25" selected>25 recent videos</option>'+
    '<option value="50">50 recent videos</option><option value="0">every measured video</option></select>'+
   '<button class="sm" onclick="histRef()">'+ico("eye",14)+'Re-measure their views</button>'+
-  '<span class="sp"></span><a class="ytbtn sm" href="/api/export?id='+cur+'&fmt=json" download>'+ico("dl",14)+'Scan JSON</a></div>'+
-  '<div class="sub" style="margin-top:8px"><b>Take a snapshot</b> re-reads the public counts of this channel (subscribers, how many uploads exist) plus a fresh listing if it is older than a day — a few seconds. It does not re-measure per-video numbers. <b>Re-measure views</b> pulls current view counts for the newest uploads through the same engine that built this scan (about 1 second per video, 8 at a time) and writes a snapshot afterwards — that is what turns history into real per-video growth. Snapshots are also written automatically every time a channel scan runs.</div>'+
+  '<span class="sp"></span>'+(H.scan?'<a class="ytbtn sm" href="/api/export?id='+esc(H.scan)+'&fmt=json" download>'+ico("dl",14)+'Scan JSON</a>':'')+'</div>'+
+  '<div class="sub" style="margin-top:8px"><b>Take a snapshot</b> re-reads the public counts of this channel (subscribers, how many uploads exist) plus a fresh listing if it is older than a day — a few seconds. It does not re-measure per-video numbers. <b>Re-scan channel</b> runs a full fresh channel scan from this page: the whole listing including any new videos, then the measurement of those videos — when it finishes it writes a new real reading into history by itself, and the candles fill with it. <b>Re-measure views</b> pulls current view counts for the newest uploads through the same engine that built this scan (about 1 second per video, 8 at a time) and writes a snapshot afterwards — that is what turns history into real per-video growth. Snapshots are also written automatically every time a channel scan runs, and the hourly sampler adds one slim real reading per tracked channel every hour.</div>'+
   '<div id="hstat"></div></div>'}
+function histGoScan(k){cur=k;D=null;IDEAS=null;WALK=null;SEL.clear();stSelUpd();go("ch")}
 function histHstat(m,cls){const e=$("#hstat");if(!e)return;
  e.innerHTML='<div class="'+(cls||"sub")+'" style="margin-top:8px">'+esc(m)+'</div>'}
 async function histTake(){histHstat("Reading the channel again — subscriber count and upload listing…");
  let r;try{r=await j("/api/hist?id="+encodeURIComponent(cur)+"&take=1")}catch(e){return histHstat("Snapshot failed: "+e.message,"err")}
  if(r.err){histHstat(r.err,"err");return}
- histHstat("Snapshot saved in "+r.elapsed+"s — "+(r.got.subs?"subscriber count read fresh":"subscriber count could not be read")+" · listing from "+(r.got.list==="cache"?"cache (under a day old)":"YouTube again")+(r.got.terr?" · "+r.got.terr:""));
+ histHstat("Snapshot saved in "+r.elapsed+"s — "+(r.got.subs?"subscriber count read fresh":"subscriber count could not be read")+" · listing: "+(r.got.list==="cache"?"from cache (under a day old)":(r.got.list==="none"?"no scan items on record for this channel, so no per-video set could be measured — use Re-scan channel below to create one first":"pulled from YouTube again"))+(r.got.terr?" · "+r.got.terr:""));
  histv()}
 async function histRef(){const k=(($("#hknum")||{}).value)||"25";
  histHstat("Re-reading view counts for "+(k==="0"?"every measured video":k+" recent videos")+" — about 1 second per video, this stays on the page…");
@@ -10566,20 +10681,54 @@ function histCnd(H){const A=H.auto||{};
  '<div class="card"><div class="bar" style="flex-wrap:wrap">'+
  '<select id="cmk" aria-label="Metric"><option value="subs">Subscribers</option><option value="views">Views (total of the measured set)</option><option value="ups">Uploads on the channel</option></select>'+
  '<select id="crg" aria-label="Time window"><option value="24h" selected>Last 24 hours — one candle per hour</option><option value="7d">Last 7 days — one candle per 6 hours</option><option value="30d">Last 30 days — one candle per day</option><option value="all">Everything — one candle per day</option></select>'+
- '<button class="go sm" onclick="loadCandles()">'+ico("refresh",14)+'Draw candles</button>'+
+ '<button class="go sm" onclick="CBK=0;loadCandles()">'+ico("refresh",14)+'Draw candles</button>'+
+ '<button class="sm" id="cpan" disabled onclick="cndPan(1)" title="Move this same window further back in time — like scrolling a crypto chart to older dates">‹ earlier</button>'+
+ '<button class="sm" id="cpan7" disabled onclick="cndPan(7)" title="Jump back seven windows at once">‹‹ ×7</button>'+
+ '<button class="sm" id="clat" disabled onclick="cndPan(-1)" title="Move the window toward the present">later ›</button>'+
+ '<span id="cwin" class="sub"></span>'+
  '<span class="sp"></span><span class="sub">auto hourly sampler: <b style="color:var('+(A.on===false?'--bad':'--ok')+')">'+(A.on===false?'off':'on')+'</b> — '+st+'</span></div>'+
  '<div id="cnd"><div class="sub">Loading candles…</div></div>'+
- '<div class="sub">A candle’s open/high/low/close are the first/highest/lowest/last <b>actual reading</b> inside that bucket — a bucket with one reading is a flat doji (one real number, not a range), and a bucket with no reading is left empty, because inventing a candle would be a lie. The hourly sampler re-reads every channel that has history: subscribers from the channel page, current views from the YouTube listing (the listing carries view counts — that is a real measurement, not the stored number). Candles for hours before the sampler existed use whatever real readings exist, at whatever spacing they have. Subscriber counts are YouTube-rounded, so flat subscriber candles at small scales are normal. The views candle totals exactly the videos that reading re-read from the listing — videos the listing no longer shows are not carried over from the previous hour.</div></div>'}
+ '<div class="sub">A candle’s open/high/low/close are the first/highest/lowest/last <b>actual reading</b> inside that bucket — a bucket with one reading is a flat doji (one real number, not a range), and a bucket with no reading is left empty, because inventing a candle would be a lie. The hourly sampler re-reads every channel that has history: subscribers from the channel page, current views from the YouTube listing (the listing carries view counts — that is a real measurement, not the stored number). Candles for hours before the sampler existed use whatever real readings exist, at whatever spacing they have. Subscriber counts are YouTube-rounded, so flat subscriber candles at small scales are normal. The views candle totals exactly the videos that reading re-read from the listing — videos the listing no longer shows are not carried over from the previous hour. The ‹ earlier / later › buttons move this same window back through time like scrolling a crypto chart — press ‹ (or ‹‹ ×7 to jump seven windows at once) again and again to reach older and older real readings, all the way to the first reading on record; the buttons only stay enabled while real readings can still exist behind the window. The window’s real dates are always shown beside the buttons, and a window with no readings says so instead of drawing anything. Hovering a candle shows its numbers on the spot.</div></div>'}
 async function loadCandles(){const el=$("#cnd");if(!el)return;
  const g=$("#crg"),m=$("#cmk");if(!g||!m)return;
- let r;try{r=await j("/api/hist?id="+encodeURIComponent(cur)+"&candles=1&metric="+m.value+"&range="+g.value)}
+ let r;try{r=await j("/api/hist?id="+encodeURIComponent(cur)+"&candles=1&metric="+m.value+"&range="+g.value+"&back="+(g.value==="all"?0:(CBK|0)))}
  catch(e){el.innerHTML='<div class="err">Candles failed: '+esc(e.message)+'</div>';return}
  if(r.err){el.innerHTML='<div class="sub">'+esc(r.err)+'</div>';return}
- el.innerHTML=cndraw(r)}
+ el.innerHTML=cndraw(r);cwin(r);cndPanState(r)}
+function cndPan(d){if(d>0&&(!$("#cpan")||$("#cpan").disabled))return;
+ if(d<0&&CBK<=0)return;CBK=Math.max(0,(CBK|0)+d);loadCandles()}
+// Pan buttons ki sachchi haalat: peeche tab tak jab tak koi ASLI reading us
+// window ke peeche ho sakti hai; aage tab tak jab tak humne pan kiya ho.
+function cndPanState(r){const p=$("#cpan"),s=$("#cpan7"),l=$("#clat");if(!p||!s||!l)return;
+ const g=$("#crg");if(!g||g.value==="all"){p.disabled=s.disabled=l.disabled=true;return}
+ const first=r.first_read?Date.parse(r.first_read):0;
+ const can=!!(r.t0&&first&&Date.parse(r.t0)>first);
+ p.disabled=s.disabled=!can;l.disabled=!(r.back>0)}
+function cwin(r){const e=$("#cwin");if(!e)return;
+ if(!r.t0||!r.t1){e.textContent="";return}
+ e.innerHTML='window: <b>'+esc(histT(r.t0))+' → '+esc(histT(r.t1))+'</b>'+
+  (r.back?' · shifted back '+r.back+' window'+(r.back>1?'s':''):'')}
+// Hover tooltip: candle par cursor rakhte hi us bucket ke ASLI numbers — time,
+// open/high/low/close aur us bucket me kitni readings thin. Gap par bhi sach:
+// "is bucket me koi reading li hi nahi gayi" — banawat ka koi number nahi.
+function cttShow(ev,html){const t=$("#ctt");if(!t||!t.parentNode)return;const box=t.parentNode;
+ t.innerHTML=html;t.style.display="block";
+ const r=box.getBoundingClientRect();let x=ev.clientX-r.left+14,y=ev.clientY-r.top+12;
+ if(x+210>r.width)x=ev.clientX-r.left-216;if(x<2)x=2;
+ if(y+100>r.height)y=ev.clientY-r.top-102;if(y<2)y=2;
+ t.style.left=Math.round(x)+"px";t.style.top=Math.round(y)+"px"}
+function cttTip(ev,i){const c=CDAT[i]||{};
+ if(!c.n){cttShow(ev,'<b>'+esc(histT(c.t))+'</b><br>no reading in this bucket — the tool took none. Nothing is invented here.');return}
+ const d=c.c-c.o;
+ cttShow(ev,'<b>'+esc(histT(c.t))+'</b> · '+c.n+' real reading'+(c.n>1?'s':'')+
+  '<br>open <b>'+fmt(c.o)+'</b> · high <b>'+fmt(c.h)+'</b><br>low <b>'+fmt(c.l)+'</b> · close <b>'+fmt(c.c)+'</b>'+
+  '<br>change in this bucket: <b style="color:'+(d>0?"var(--ok)":(d<0?"var(--bad)":"var(--mut2)"))+'">'+(d>0?"+":"")+fmt(d)+'</b>')}
+function cttOff(){const t=$("#ctt");if(t)t.style.display="none"}
 function clab(t,b){const d=new Date(t);
  if(b>=1440)return esc((d.getMonth()+1)+"-"+d.getDate());
  return esc(String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"))}
 function cndraw(r){const C=r.candles||[],B=(r.bucket||60)*60000;
+ CDAT=C;
  if(!C.length)return '<div class="sub">'+esc(r.note||"No readings exist for this channel yet — take a snapshot first.")+'</div>';
  const have=C.filter(c=>c.n>0);
  if(!have.length)return '<div class="sub">'+esc(r.note||"No real reading falls inside this window.")+'</div>';
@@ -10603,23 +10752,25 @@ function cndraw(r){const C=r.candles||[],B=(r.bucket||60)*60000;
   xtk+='<text x="'+x.toFixed(1)+'" y="'+(Hh-9)+'" text-anchor="middle" style="font-size:var(--fs-micro);fill:var(--mut2)">'+clab(c.t,r.bucket)+'</text>'+
        '<line x1="'+x.toFixed(1)+'" y1="'+(Hh-PB)+'" x2="'+x.toFixed(1)+'" y2="'+(Hh-PB+3)+'" stroke="var(--edge)"/>'});
  let cd="";
- C.forEach(c=>{const xc=X(Date.parse(c.t)+B/2);
-  if(!c.n){cd+='<line x1="'+xc.toFixed(1)+'" y1="'+(Hh-PB-5)+'" x2="'+xc.toFixed(1)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)" stroke-dasharray="2 2"><title>no reading in this bucket — the tool took none; nothing is invented here</title></line>';return}
+ C.forEach((c,i)=>{const xc=X(Date.parse(c.t)+B/2);
+  if(!c.n){cd+='<line x1="'+xc.toFixed(1)+'" y1="'+(Hh-PB-5)+'" x2="'+xc.toFixed(1)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)" stroke-dasharray="2 2" onmousemove="cttTip(event,'+i+')" onmouseleave="cttOff()"><title>no reading in this bucket — the tool took none; nothing is invented here</title></line>';return}
   const up=c.c>=c.o,col=up?"var(--ok)":"var(--bad)",
    y1=Y(Math.max(c.o,c.c)),y2=Y(Math.min(c.o,c.c));
-  cd+='<g style="cursor:crosshair">'+
+  cd+='<g style="cursor:crosshair" onmousemove="cttTip(event,'+i+')" onmouseleave="cttOff()">'+
    '<line x1="'+xc.toFixed(1)+'" y1="'+Y(c.h).toFixed(1)+'" x2="'+xc.toFixed(1)+'" y2="'+Y(c.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1.4"/>'+
    '<rect x="'+(xc-bw/2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1.6,y2-y1).toFixed(1)+'" fill="'+(up?"rgba(var(--okrgb),.5)":"rgba(var(--badrgb),.55)")+'" stroke="'+col+'" stroke-width="1"/>'+
    '<title>'+clab(c.t,r.bucket)+' bucket · open '+fmt(c.o)+' · high '+fmt(c.h)+' · low '+fmt(c.l)+' · close '+fmt(c.c)+' · '+c.n+' real reading'+(c.n>1?'s':'')+'</title></g>'});
- return '<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="'+esc(r.metric)+' candles over time" style="width:100%;height:auto;display:block">'+
+ return '<div style="position:relative">'+
+  '<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="'+esc(r.metric)+' candles over time" style="width:100%;height:auto;display:block">'+
   g+'<line x1="'+PL+'" y1="'+(Hh-PB)+'" x2="'+(W-PR)+'" y2="'+(Hh-PB)+'" stroke="var(--edge)"/>'+cd+xtk+'</svg>'+
+  '<div id="ctt" style="display:none;position:absolute;z-index:6;pointer-events:none;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r2);padding:7px 9px;font-size:var(--fs-micro);max-width:210px;box-shadow:0 6px 18px rgba(0,0,0,.45)"></div></div>'+
   (r.note?'<div class="sub" style="margin-top:6px">'+esc(r.note)+'</div>':'')+
   '<div class="sub" style="margin-top:4px">'+have.length+' candle'+(have.length>1?'s':'')+' drawn from '+r.n_read+' real reading'+(r.n_read>1?'s':'')+' · first reading on record: '+(r.first_read?esc(histT(r.first_read)):"—")+' · hover a candle for its exact values and time</div>'}
 function histRep(H){
  const sn=H.snaps||[],last=sn[sn.length-1]||{},ps=H.pairs||[],pr=ps[ps.length-1];
  let h='<h2>Channel History</h2>'+
   '<div class="sub">A snapshot is a real reading of this channel at one moment: subscriber and upload counts from YouTube, plus per-video views, likes and comments from our own measurements. Nothing here is modelled, projected or back-filled with today’s numbers. Growth is computed only between two actual snapshots, and only for videos that were measured in both — videos present in one snapshot alone are counted separately, never folded into a growth figure.</div>'+
-  histBar()+histMeta();
+  histBar(H)+histMeta();
  if(!sn.length)return h+'<div class="card"><div class="sub">No snapshot exists for this channel yet. Take one above to start the series.</div></div>';
  const ts=sn.map(x=>x.ts);
  h+='<div class="kpi">'+kpi("snapshots on record",String(H.n),"var(--acc)")+
@@ -10661,21 +10812,77 @@ h+='<div class="sec">Trend across snapshots <small> — every dot is one real sn
   '<th scope="col" class="num">Δ views (matched)</th><th scope="col" class="num">matched</th></tr>'+rows+'</table></div>'+
   '<div class="sub">“how” is written honestly: <b>scan</b> = a channel scan ran at that moment, <b>backfill</b> = the reading that was already stored when History was first opened, <b>manual</b> = public counts re-read on request, <b>refresh</b> = per-video views re-measured on request. Channel uploads are counted from the YouTube listing, capped at '+fmt(400)+' per type; anything beyond that is not counted anywhere in this app.</div>';
  return h}
+// ---------- Channel History: channels ki list (Scan History jaisa record) ----------
+// Jo channels is tool ne kabhi scan ya naap kiye hain wo yahan list hote hain —
+// hist files aur channel scan files ka merged sach, koi banawat ka number nahi.
+// Row click → us channel ka poora record (candles, subscribers, har reading).
+// "Re-scan" → us channel ki fresh channel scan (nayi videos fetch + naap), jo
+// khatam hote hi apne aap ek nayi ASLI reading history me likh deti hai.
+let HL=[],HLQ="",CBK=0,CDAT=[];
+async function histList(){const _t=RTN;
+ spin("Reading the list of measured channels…");
+ let r;try{r=await j("/api/histlist")}catch(e){if(_t!==RTN)return;
+  $("#main").innerHTML='<h2>Channel History</h2><div class="err">'+esc(e.message)+'</div>';return}
+ if(_t!==RTN)return;
+ HL=r.channels||[];const A=r.auto||{};
+ const st=A.last?('last sampler round '+esc(histT(A.last))+' · '+(A.n||0)+' readings saved, '+(A.errs||0)+' failed')
+   :'first round runs about a minute after the server starts, then every hour';
+ $("#main").innerHTML='<h2>Channel History</h2>'+
+  '<div class="sub">Every channel this tool has scanned or measured, newest activity first. <b>Open record</b> gives the full picture: the candlestick chart, every subscriber reading ever taken, every snapshot and its real deltas. <b>Re-scan</b> runs a fresh channel scan on that channel — its new videos are fetched and measured, and the finished scan writes a new real reading into history by itself, so the candles fill with it. While the server runs, the hourly sampler adds one real reading per channel every hour. Nothing is invented anywhere: where no reading exists the chart shows a gap.</div>'+
+  '<div class="card"><div class="bar" style="flex-wrap:wrap">'+
+  '<input id="hlq" placeholder="Filter by channel name or handle" value="'+esc(HLQ)+'" style="flex:1;min-width:220px" oninput="HLQ=this.value;$(\'#hlrows\').innerHTML=hlRows()">'+
+  '<span class="sp"></span><span class="sub">auto hourly sampler: <b style="color:var('+(A.on===false?'--bad':'--ok')+')">'+(A.on===false?'off':'on')+'</b> — '+st+'</span></div>'+
+  '<div id="hlst"></div><div id="hlrows" style="margin-top:8px">'+hlRows()+'</div>'+
+  '<div class="sub">“readings on record” = every real reading kept for that channel (channel scans, hourly sampler, manual snapshots). A channel shown with 0 readings was scanned but never opened in History — opening it stores its scan-time reading first. Re-scan re-reads everything from YouTube again: subscribers, the whole listing, current view counts — a new real measurement that lands in the candles and every panel. Channels whose scan file was deleted still keep their full history: the readings live in the history file itself.</div></div>'}
+function hlst(m,cls){const e=$("#hlst");if(!e)return;
+ e.innerHTML='<div class="'+(cls||"sub")+'" style="margin-top:8px">'+esc(m)+'</div>'}
+function hlRows(){const q=HLQ.toLowerCase().trim();
+ let L=HL.slice();
+ if(q)L=L.filter(c=>((c.name||"")+" "+(c.handle||"")).toLowerCase().includes(q));
+ if(!L.length)return '<div class="sub">'+(q?'No channel matches “'+esc(HLQ)+'”.':'No channel has been measured yet. Open a channel once — it appears here by itself and keeps its record from then on.')+'</div>';
+ return '<div class="stscr"><table><tr><th scope="col">channel</th><th scope="col" class="num">readings on record</th>'+
+  '<th scope="col">last reading</th><th scope="col" class="num">subscribers at last reading</th>'+
+  '<th scope="col" class="num">channel scans</th><th scope="col"></th></tr>'+
+  L.map(c=>'<tr><td><b>'+esc(c.name||"(unnamed)")+'</b>'+(c.handle?' <span class="sub">'+esc(c.handle)+'</span>':'')+'</td>'+
+   '<td class="num">'+(c.n||0)+'</td>'+
+   '<td>'+(c.last?esc(histT(c.last)):'<span class="sub">none yet — opening it stores its scan-time reading</span>')+'</td>'+
+   '<td class="num">'+(c.subs==null?'<span class="sub">no subs reading</span>':fmt(c.subs))+'</td>'+
+   '<td class="num">'+(c.scans||0)+'</td>'+
+   '<td style="white-space:nowrap" class="num"><button class="go sm" onclick="histOpen(\''+esc(c.sid||c.cid)+'\')">'+ico("eye",13)+'Open record</button> '+
+   '<button class="sm" onclick="histRescan(\''+esc(c.cid)+'\',\''+esc(c.url||"")+'\',this)">'+ico("refresh",13)+'Re-scan</button></td></tr>').join("")+'</table></div>'}
+function histOpen(k){cur=k;D=null;IDEAS=null;WALK=null;SEL.clear();stSelUpd();go("hist")}
+async function histRescan(cid,url,btn){
+ const c=HL.find(x=>x.cid===cid)||{};
+ const u=url||c.url||"";
+ if(!u)return hlst("This channel has no stored URL — open it once by name or link, then Re-scan works from here.","err");
+ if(btn)btn.disabled=true;
+ hlst("Re-scanning "+(c.name||"this channel")+" — a full fresh scan: the listing, then the measurement of its videos including any new ones. When it finishes it writes a new real reading into history by itself. This takes about as long as opening the channel normally…");
+ let r;try{r=await j("/api/chscan?url="+encodeURIComponent(u))}
+ catch(e){hlst("Re-scan failed: "+e.message,"err");if(btn)btn.disabled=false;return}
+ if(r.err||r.need){hlst(r.err||"The channel link could not be resolved — re-scan not started.","err");if(btn)btn.disabled=false;return}
+ for(let k=0;k<900;k++){let p;try{p=await j("/api/progress?id="+r.job)}catch(e){break}
+  if(p.state==="done"){try{await boot()}catch(e){}
+   if(view!=="hist"){toast("Re-scan done — new real reading written into history","ok");return}
+   if($("#hlrows")){histList();hlst("Re-scan done — new videos fetched and measured, and a new real reading was written into history. The candles fill with it.","ok")}
+   else{cur=r.id;D=null;IDEAS=null;histv();toast("Re-scan done — new real reading written into history","ok")}
+   return}
+  if(p.state==="error"){hlst("Re-scan failed: "+(p.error||"?"),"err");if(btn)btn.disabled=false;return}
+  hlst("Re-scan running — "+(p.current||"…")+" · "+(p.done||0)+"/"+(p.total||0));
+  await new Promise(x=>setTimeout(x,1500));}
+ hlst("The re-scan is still running in the background — its reading lands in history when it finishes.")}
 async function histv(){const _t=RTN;
  const s=SCANS.find(x=>x.id===cur);
- if(!s||s.kind!=="channel"){$("#main").innerHTML='<h2>Channel History</h2>'+
-   '<div class="card"><div class="sub">History follows one channel across time. Pick a channel in the sidebar, or open a new one. A topic scan is a single moment across many channels, so there is nothing to measure growth between.</div>'+
-   '<div class="bar"><button class="go sm" onclick="goNewChan()">'+ico("plus",14)+'Open a channel</button>'+
-   '<button class="sm" onclick="go(\'cmp\')">'+ico("search",14)+'Browse topics instead</button></div></div>';return}
+ const ck=/^UC[\w-]{20,24}$/.test(cur||"");
+ if((!s||s.kind!=="channel")&&!ck){histList();return}
  spin("Reading history…");
- try{await ensureData()}catch(e){}
+ if(!ck){try{await ensureData()}catch(e){}}
  if(_t!==RTN)return;
  let H;try{H=await j("/api/hist?id="+encodeURIComponent(cur))}
  catch(e){if(_t!==RTN)return;$("#main").innerHTML='<h2>Channel History</h2><div class="err">'+esc(e.message)+'</div>';return}
  if(_t!==RTN)return;
- if(H.err){$("#main").innerHTML='<h2>Channel History</h2><div class="err">'+esc(H.err)+'</div>';return}
+ if(H.err){HLQ="";histList();return}
  $("#main").innerHTML=histRep(H);
- if((H.n||0)>=1)loadCandles()}
+ if((H.n||0)>=1){CBK=0;loadCandles()}}
 // ---------- Scan history & rollback (audit trail) ----------
 // Har scan ek immutable snapshot hai — ye view un sab ka record hai: kaab chala, kis
 // par chala, kitni videos naapi gayi. "Restore" ka matlab sirf itna hai ke wahi purana
