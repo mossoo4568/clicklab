@@ -14,3 +14,7 @@ scikit-learn
 # Sirf "Bahar ki garmahat" card ka Google Trends hisala. Na lage to wo card saaf
 # "install karo" bolta hai — baaki tool par koi asar nahi. (Google ka unofficial data.)
 pytrends
+# Analyze & Edit ka local speech transcript (faster-whisper, CPU int8). Optional:
+# na lage to tool saaf "transcript unavailable" likhta hai aur silence/audio analysis
+# chalta rehta hai. Pehli dafa model weights Hugging Face se free download hote hain.
+faster-whisper

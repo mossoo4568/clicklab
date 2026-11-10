@@ -1,4 +1,4 @@
-"""Runtime verification for the 70 creator tools.
+"""Runtime verification for the 71 creator tools.
 
 Runs public-data tools against a local ClickLab server with real YouTube reads,
 records frontend-only and AI-provider tools honestly, and writes
@@ -136,7 +136,7 @@ def main():
     frontend = ['title-score', 'video-ids', 'embed', 'timestamp', 'frames', 'money', 'valuation',
                 'monetization', 'pay-view', 'sponsor', 'watch-time', 'rpm', 'take-home', 'income',
                 'quota', 'rpm-country', 'rpm-niche', 'preview', 'image-check', 'banner', 'resize', 'adsense',
-                'rights-edit', 'video-edit', 'audio-lab']
+                'rights-edit', 'video-edit', 'audio-lab', 'smart-edit']
     for tid in frontend:
         if tid in browser:
             record(tid, browser[tid]['status'], 'browser: ' + browser[tid]['evidence'])

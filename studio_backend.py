@@ -735,7 +735,7 @@ def workspace_feed():
                 outliers.append(v)
                 seen.add(v['id'])
     outliers.sort(key=lambda v: v['multiplier'], reverse=True)
-    return {'workspaces': len(channels), 'tracked': len(snapshots), 'tools': 70,
+    return {'workspaces': len(channels), 'tracked': len(snapshots), 'tools': 71,
             'outliers': outliers[:30], 'alerts': [v for v in outliers if v['multiplier'] >= 5][:30],
             'source': 'Locally saved public readings; refresh channels to update the research feed'}
 

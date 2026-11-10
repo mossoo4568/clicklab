@@ -4,12 +4,13 @@ ClickLab is a local-first YouTube research and creator workspace. It combines pu
 
 ## Features
 
-- **Creator tools:** 70 research, video, audio, image, writing, and calculator tools.
+- **Creator tools:** 71 research, video, audio, image, writing, and calculator tools.
 - **Channel workspaces:** organize your channels and add up to 10 competitors per channel.
 - **Public statistics:** track observed channel counters and their actual collection timestamps.
 - **Video Intelligence Pack:** inspect complete public descriptions, creator-applied tags, subtitles, and screen OCR from one video link.
 - **Thumbnail workflows:** measure local images, compare packaging, prepare A/B variants, and optionally generate images.
 - **Local media editing:** clean owned or licensed audio (noise reduction, EQ, loudness, fades, peak/RMS/clipping measurement) and edit local video (trim, speed, colour, loudness, fades, reframing, SRT captions). All processing stays on your computer.
+- **Analyze & Edit:** analyse your own video locally (silence spans, audio levels, optional faster-whisper transcript), describe the edit in plain words, and let the configured free Gemini propose a bounded normal-edit plan. You approve the plan before FFmpeg applies it locally. Only a short text summary is sent to Gemini; no video or audio is uploaded. Instead of a local file you can import a video from your own YouTube channel by link (downloaded locally via yt-dlp, rights confirmation required); the import is kept server-side and referenced by a short-lived token. Normal quality edits only — no copyright or fingerprint evasion.
 - **Grounded drafting:** attach real YouTube evidence to supported AI drafting tools.
 - **Responsive interface:** adapts to mobile, laptop, desktop, and wide-screen layouts.
 
@@ -17,11 +18,11 @@ ClickLab is a local-first YouTube research and creator workspace. It combines pu
 
 - **Windows 10 or 11** for the included batch installers.
 - **Python 3.x**; `setup.bat` can install Python 3.12 through `winget` when available.
-- Python packages listed in [requirements.txt](requirements.txt): Pillow, NumPy, yt-dlp, OpenCV, RapidOCR, scikit-learn, and pytrends.
+- Python packages listed in [requirements.txt](requirements.txt): Pillow, NumPy, yt-dlp, OpenCV, RapidOCR, scikit-learn, and pytrends. Optional `faster-whisper` enables local speech transcription in Analyze & Edit (model weights download free on first use).
 - **FFmpeg** (with `ffprobe`) available on `PATH` for video-frame screen OCR and local audio/video editing.
 - A **YouTube Data API v3 key** for tools that use the YouTube Data API. Public-page extraction does not cover every API-backed feature.
 - Optional provider keys for specific features:
-  - **Gemini:** AI drafting and explicitly selected API screen OCR.
+  - **Gemini:** AI drafting, the Analyze & Edit plan, and explicitly selected API screen OCR.
   - **Runware:** optional AI thumbnail generation.
 
 Node.js is not required to run ClickLab. No API key is included in this repository.
@@ -94,7 +95,7 @@ Local runtime data is stored primarily in `thumb_output/`. Back up that folder s
 python -m unittest test_studio test_studio_features test_media_edit
 ```
 
-The current suite contains 55 tests. Responsive browser tests require Python Playwright and an installed Chrome browser; they are skipped when Playwright is unavailable. Media-edit round-trip tests are skipped when FFmpeg or NumPy is unavailable.
+The current suite contains 77 tests. Responsive browser tests require Python Playwright and an installed Chrome browser; they are skipped when Playwright is unavailable. Media-edit round-trip tests are skipped when FFmpeg or NumPy is unavailable. The Analyze & Edit planner tests mock Gemini, and the YouTube import tests mock yt-dlp, so no provider quota or network download is spent.
 
 For optional public-data tool verification:
 
