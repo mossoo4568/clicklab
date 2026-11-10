@@ -1,6 +1,9 @@
 # API keys — har user ki apni hoti hain, repo me nahi jaatin
 *_key.txt
 cookies.txt
+.env
+.env.*
+!.env.example
 
 # user ki history/runtime data (scans, OCR, transcripts, banaye thumbnails)
 thumb_output/

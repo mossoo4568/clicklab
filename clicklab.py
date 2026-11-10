@@ -716,8 +716,13 @@ def tr_get(vid):
         return {"error": "video id saaf nahi"}
     TR_DIR.mkdir(exist_ok=True)
     fp = TR_DIR / (vid + ".txt")
+    timed = TR_DIR / (vid + ".timed.json")
     if fp.exists():
-        return {"ok": True, "vid": vid,
+        try:
+            cues = json.loads(timed.read_text(encoding="utf-8")) if timed.exists() else []
+        except (ValueError, OSError):
+            cues = []
+        return {"ok": True, "vid": vid, "cues": cues,
                 "text": fp.read_text(encoding="utf-8", errors="replace"), "cached": True}
     cmd = [find_ytdlp(), "--skip-download", "--no-warnings", "--write-auto-subs",
            "--write-subs", "--sub-langs", "en.*,ur.*,hi.*", "--convert-subs", "vtt",
@@ -729,7 +734,7 @@ def tr_get(vid):
     if r[0] != 0 and "429" in (r[2] or r[1] or ""):
         time.sleep(4)
         r = run(cmd, timeout=120)
-    txt, lang = None, ""
+    txt, lang, cues = None, "", []
     for f in sorted(TR_DIR.glob(vid + ".*.vtt")):
         try:
             parts = f.name.split(".")
@@ -737,9 +742,13 @@ def tr_get(vid):
             t = _tr_vtt(f.read_text(encoding="utf-8", errors="replace"))
             if len(t) > 40 and (txt is None or lang.startswith("en") or not lang):
                 txt, lang = t, lg
+                from studio_features import parse_vtt
+                cues = parse_vtt(f.read_text(encoding="utf-8", errors="replace"))
         except Exception:
             pass
     for f in TR_DIR.glob(vid + ".*"):
+        if f.suffix not in (".vtt", ".srt", ".ass", ".lrc", ".part", ".ytdl"):
+            continue
         try:
             f.unlink(missing_ok=True)
         except Exception:
@@ -762,12 +771,13 @@ def tr_get(vid):
     cut = len(txt) > 60000
     txt = txt[:60000]
     fp.write_text(txt, encoding="utf-8")
-    return {"ok": True, "vid": vid, "text": txt, "lang": lang, "cut": cut,
+    timed.write_text(json.dumps(cues, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "vid": vid, "text": txt, "lang": lang, "cut": cut, "cues": cues,
             "note": "ye YouTube ke apne subtitles hain (manual ya auto-generated) — auto me "
                     "galtiyan ho sakti hain; tool ne sirf timestamps hatakar joda hai, shabd badle nahi"}
 
 
-def tr_ocr(vid):
+def tr_ocr(vid, local_only=False, force_gem=False):
     """Jin videos par subtitles hi nahi (khamosh video, quiz, text-only slides — jaise
     whiteboard/stickman explainers aksar hote hain), wahan SCREEN par likha text frames
     se padha jaata hai: video ka sabse chhota format download → har ~step second ka
@@ -778,10 +788,13 @@ def tr_ocr(vid):
     if not vid:
         return {"error": "video id saaf nahi"}
     TR_DIR.mkdir(exist_ok=True)
-    fp = TR_DIR / (vid + ".ocr.txt")
+    fp = TR_DIR / (vid + (".api.ocr.txt" if force_gem else ".local.ocr.txt" if local_only else ".ocr.txt"))
+    engine = "local" if local_only else ("api" if force_gem else "auto")
     if fp.exists():
-        return {"ok": True, "vid": vid, "kind": "ocr", "cached": True,
+        return {"ok": True, "vid": vid, "kind": "ocr", "cached": True, "engine": engine,
                 "text": fp.read_text(encoding="utf-8", errors="replace")}
+    if force_gem and not gem_keys():
+        return {"error": "API screen OCR requires a Gemini key. Add it in Settings or choose local OCR."}
     ff = shutil.which("ffmpeg")
     if not ff:
         return {"error": "ffmpeg nahi mila — screen-text OCR ke liye ffmpeg chahiye (install karke dobara try karein)"}
@@ -840,7 +853,12 @@ def tr_ocr(vid):
         _log("tr-ocr %s: %d frames bane — ab har frame ka alag OCR/API call (ye slow hissa hai)" % (vid, len(frames)))
 
         def frame_lines(p):
-            ws = ocr_words(str(p)) or []
+            if force_gem:
+                ws = gem_ocr(str(p))
+                if ws is None:
+                    raise ValueError('Gemini API OCR failed. Check your key, quota and provider availability; no local fallback was used.')
+            else:
+                ws = ocr_words(str(p), gem_ok=False if local_only else None) or []
             ws = [w for w in ws if (w.get("t") or "").strip()]
             if not ws:
                 return []
@@ -870,7 +888,11 @@ def tr_ocr(vid):
             _log("tr-ocr %s: frame %d/%d ka OCR shuru" % (vid, i + 1, len(frames)))
             tsec = int(i * step + step / 2)
             stamp = "%02d:%02d" % (tsec // 60, tsec % 60)
-            for s in frame_lines(p):
+            try:
+                lines = frame_lines(p)
+            except ValueError as exc:
+                return {"error": str(exc), "engine": engine}
+            for s in lines:
                 if s == prev:
                     continue
                 if got and s in got[-1][1]:  # rolling same slide ka dohra text
@@ -889,10 +911,12 @@ def tr_ocr(vid):
         fp.write_text(text, encoding="utf-8")
         _log("tr-ocr %s: MUKAMMAL — %d screen-text lines, cache me save (ab kabhi dobara API kharcha nahi)" % (vid, len(got)))
         return {"ok": True, "vid": vid, "kind": "ocr", "text": text, "cut": cut,
-                "frames": len(frames), "step": int(step),
+                "frames": len(frames), "step": int(step), "engine": engine,
                 "note": "ye SCREEN par dikha hua text hai — har ~%d second ke frame ka OCR, "
                         "time ke saath. Ye video ki AWAZ nahi hai (subtitles is par the hi "
-                        "nahi), aur beech ke chhote/tez badle hue text chhoot sakte hain." % int(step)}
+                        "nahi), aur beech ke chhote/tez badle hue text chhoot sakte hain." % int(step)
+                        + (" Engine: Gemini vision (API)." if force_gem else
+                           (" Engine: local on-device OCR." if local_only else ""))}
     finally:
         shutil.rmtree(wd, ignore_errors=True)
         _TRP.pop(vid, None)
@@ -1295,20 +1319,14 @@ def toks(s):
 
 
 def meta_of(vid):
-    """Ek video ka ASLI metadata + disk cache. v2: chapters ka waqt yt-dlp ke `start_time`
-    (seconds) se padha jaata hai — `start` naam ka koi field hota hi nahi, isliye har chapter
-    0:00 par aa raha tha. v3: `ts` — video ke chhapne ka poora waqt (epoch seconds,
-    `timestamp` field se). Ye channel ki flat listing me KABHI nahi aata (na /videos tab
-    me, na uploads playlist me — 25 Oct ko test kar ke dekha), sirf us video ki apni
-    metadata me hota hai. Is liye ghari ka pattern sirf naapi gayi videos par banta hai.
-    Purana cache (bina v2/v3 ke) khud discard ho kar dobara aata hai."""
+    """Cache v4 excludes older records with truncated descriptions and tags."""
     if not re.fullmatch(r"[0-9A-Za-z_-]{11}", vid or ""):
         return {"err": "video id theek nahi"}
     f = META_DIR / (vid + ".json")
     if f.exists():
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
-            if d.get("v") == 3:
+            if d.get("v") == 4:
                 return d
         except Exception:
             pass
@@ -1340,9 +1358,9 @@ def meta_of(vid):
     except Exception:
         return {"err": "metadata parse nahi hua"}
     caps = len(j.get("automatic_captions") or {}) + len(j.get("subtitles") or {})
-    m = {"v": 3, "id": vid, "title": j.get("title") or "", "ch": j.get("channel") or "",
-         "tags": [str(t).strip() for t in (j.get("tags") or []) if str(t).strip()][:40],
-         "desc": (j.get("description") or "")[:4000], "likes": j.get("like_count"),
+    m = {"v": 4, "id": vid, "title": j.get("title") or "", "ch": j.get("channel") or "",
+         "tags": j.get("tags") or [],
+         "desc": j.get("description") or "", "likes": j.get("like_count"),
          "cmts": j.get("comment_count"), "subs": j.get("channel_follower_count"),
          "views": j.get("view_count"), "up": j.get("upload_date") or "",
          "ts": j.get("timestamp"),
@@ -8851,34 +8869,20 @@ IDEA_ASK = (
 
 
 def idea_pack(vid, topic=""):
-    """Ek video ka idea-packet: ASLI tags (YouTube listing se) + gine-gaye keywords
-    (title+tags+description se) = fact; aur matched topics + taqatwar ideas =
-    "model ka andaza" — kabhi naapon me nahi milte. Model chain: Gemini (apni key,
-    do models) → Google 503/baadh mein ho to Pollinations ka keyless muft rasta —
-    is liye ek provider girne par bhi ideas rukte nahi. Jawab disk par cache — dobara
-    click par seconds me, quota bachta hai. Key na ho to sirf facts bhejte hain aur
-    saaf likhte hain ke ideas ke liye key chahiye."""
+    """Applied keywords are the creator's tags; generated ideas remain separate."""
     m = meta_of(vid)
     if m.get("err"):
         return {"ok": False, "error": m["err"]}
     title = m.get("title") or ""
-    tags = [str(t).strip() for t in (m.get("tags") or []) if str(t).strip()][:30]
-    cw = Counter()
-    for w in toks(title):
-        cw[w] += 1
-    for t in tags:
-        for w in toks(str(t)):
-            cw[w] += 2
-    for w in toks((m.get("desc") or "")[:1500]):
-        cw[w] += 1
-    kws = [w for w, _n in cw.most_common(60) if len(w) > 2][:18]
+    tags = m.get("tags") or []
+    kws = list(tags)
     out = {"ok": True, "vid": vid, "title": title, "ch": m.get("ch") or "",
            "tags": tags, "keywords": kws, "ideas": [], "topics": [], "model": ""}
     if not gem_key():
         out["no_key"] = True
         return out
     ctx = ("VIDEO TITLE: " + title[:300] + "\nCHANNEL: " + (m.get("ch") or "")[:80] +
-           "\nASLI TAGS: " + ", ".join(tags[:30]) +
+           "\nASLI TAGS: " + ", ".join(tags) +
            "\nDESCRIPTION (excerpt): " + re.sub(r"\s+", " ", (m.get("desc") or ""))[:1200] +
            (("\nUSER SCAN TOPIC: " + topic[:120]) if topic else ""))
     # Do pakke: (1) ab ideas bhi wahi poori chain use karte hain jo verdict wala
@@ -8897,6 +8901,7 @@ def idea_pack(vid, topic=""):
             c = json.loads(cf.read_text(encoding="utf-8"))
             if c.get("ctx_h") == chash:
                 c.pop("ctx_h", None)
+                c.update({key: out[key] for key in ("title", "ch", "tags", "keywords")})
                 c["cached"] = True
                 return c
         except Exception:
@@ -9046,6 +9051,47 @@ def export_scan(sid, fmt="csv"):
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".bmp": "image/bmp"}
 
 
+def live_channel(query):
+    """Uncached public statistics. Never substitute saved scans for fresh data."""
+    query = str(query or "").strip()
+    if not query:
+        return {"error": "Enter a channel @handle, channel ID or YouTube channel URL."}
+    if "://" in query:
+        u = urllib.parse.urlparse(query)
+        if u.hostname not in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+            return {"error": "Use a youtube.com channel URL."}
+        query = urllib.parse.unquote(u.path).strip("/")
+    params = {"part": "snippet,statistics,contentDetails"}
+    if query.startswith("channel/"):
+        query = query.split("/")[1]
+    if re.fullmatch(r"UC[\w-]{22}", query):
+        params["id"] = query
+    elif query.startswith("@"):
+        params["forHandle"] = query.split("/")[0]
+    elif query.startswith("user/"):
+        params["forUsername"] = query.split("/")[1]
+    else:
+        return {"error": "Use an exact @handle or channel ID. Search by name in the channel search below."}
+    result = yt_get("channels", params)
+    if result.get("error"):
+        return result
+    if not result.get("items"):
+        return {"error": "Channel not found. Check its @handle or channel URL."}
+    ch = result["items"][0]
+    sn, st = ch.get("snippet", {}), ch.get("statistics", {})
+    def count(key):
+        value = st.get(key)
+        return int(value) if value is not None else None
+    return {"id": ch["id"], "name": sn.get("title", ""),
+            "handle": sn.get("customUrl", ""), "description": sn.get("description", ""),
+            "avatar": (sn.get("thumbnails", {}).get("medium") or {}).get("url", ""),
+            "joined": sn.get("publishedAt"),
+            "subscribers": None if st.get("hiddenSubscriberCount") else count("subscriberCount"),
+            "views": count("viewCount"), "videos": count("videoCount"),
+            "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "source": "YouTube Data API", "cached": False}
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -9078,6 +9124,12 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         d = self._body()
         try:
+            if u.path == "/api/studio/tracker":
+                return self._send(200, STUDIO.tracker(d.get("action", "list"), d))
+            if u.path == "/api/studio/tool":
+                return self._send(200, STUDIO.tool_run(d.get("kind", ""), d))
+            if u.path == "/api/studio/workspace":
+                return self._send(200, STUDIO.workspace(d.get("action", "list"), d))
             if u.path == "/api/upload":
                 name = re.sub(r"[^\w.\-]", "", (d.get("name") or "thumb.png"))
                 b = d.get("b64") or ""
@@ -9161,7 +9213,11 @@ class H(BaseHTTPRequestHandler):
             _log("%s %s" % (time.strftime("%H:%M:%S"), u.path + (("?" + u.query) if u.query else "")))
         try:
             if u.path == "/":
-                return self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                STUDIO.start_worker()
+                page = PAGE.replace("</style>", (HERE / "studio.css").read_text(encoding="utf-8") + "</style>", 1)
+                marker = "(async()=>{try{await boot()}"
+                page = page.replace(marker, (HERE / "studio.js").read_text(encoding="utf-8") + "\n" + (HERE / "studio_pro.js").read_text(encoding="utf-8") + "\n" + (HERE / "studio_features.js").read_text(encoding="utf-8") + "\n" + marker, 1)
+                return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             if u.path == "/api/sys":
                 # UI ko wahi thresholds/engine bataye jo server par sach me chal rahe hain,
                 # taaki page me koi hand-picked number dobara na likha jaaye.
@@ -9257,6 +9313,8 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/radar":
                 # niche radar: chhote channels jo zyada views kama rahe hain (job banega)
                 return self._send(200, radar(q.get("q"), pnum(q.get("n")) or 18))
+            if u.path == "/api/chlive":
+                return self._send(200, live_channel(q.get("q")))
             if u.path == "/api/chsearch":
                 # YouTube ka Channel filter: naam se channels ki list (subscriber/verified
                 # YouTube ka diya hua hai). Result cache hota hai (chc/).
@@ -10118,6 +10176,29 @@ details>summary:before{color:var(--acc2)}
 /* Toast side se fisle kar aata hai */
 @keyframes tin{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* Focused studio layout: calm surfaces, consistent spacing, readable data. */
+:root{--bg:#0b1018;--panel:#131c28;--panel2:#1b2736;--line:#28374a;--tx2:#a9b8cb;--mut:#9aabc1;--sh:none}
+.aur{display:none}nav{background:#0e1520;backdrop-filter:none;width:236px}
+#main{max-width:1600px;margin:auto;padding:28px 32px 64px}
+#main>h2{font-size:28px;margin-bottom:8px}#main>.sub{max-width:940px;margin-bottom:24px}
+.card{padding:22px;border-radius:14px;box-shadow:none;margin-bottom:18px}
+.card h3{font-weight:650;font-size:17px;margin-bottom:12px}
+button.go{box-shadow:none;background:#7fe6ff;color:#08222c}button.go:hover{box-shadow:none}
+.bar{gap:10px;flex-wrap:wrap}input:not([type=checkbox]):not([type=radio]),select{min-height:42px}
+#cq{flex:1;min-width:200px!important}.kpi{gap:12px}.kpi>div{padding:18px;box-shadow:none}
+.card{min-width:0;overflow-x:auto}.stscr,.st .tp{overflow-x:auto;max-width:100%}.stt tbody td{padding-top:14px;padding-bottom:14px}.stt thead th{background:#182333}
+.live-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.live-eyebrow{color:var(--acc2);font-size:11px;letter-spacing:.16em;font-weight:700;margin-bottom:8px}
+.live-card{border-color:#365468;background:linear-gradient(115deg,#162a38,#131c28 65%)}
+.live-card h3{font-size:24px;margin-bottom:4px}.live-form{display:flex;gap:10px;margin:22px 0 16px;flex-wrap:wrap}
+.live-form input{flex:1;min-width:180px}.live-profile{display:flex;align-items:center;gap:14px;margin:20px 0}
+.live-profile img{width:56px;height:56px;border-radius:50%}.live-profile strong{font-size:20px}
+.live-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0}
+.live-metrics>div{padding:20px;background:#0d1823;border:1px solid var(--line);border-radius:12px}
+.live-metrics b{display:block;font-size:30px;letter-spacing:-.03em;margin-top:8px;overflow-wrap:anywhere}
+.live-note{font-size:12px;color:var(--tx2);line-height:1.7}.live-state{font-size:13px;color:var(--acc2)}
+@media(max-width:700px){#main{padding:18px 14px 40px}.card{padding:16px}.live-metrics{grid-template-columns:1fr}.live-metrics b{font-size:26px}.live-form button{flex:1}}
 </style></head><body>
 <!-- background light: halka static cyan wash (CSS .aur) — decorative, screen-reader ke liye chhupa -->
 <div class="aur" aria-hidden="true"></div>
@@ -10394,12 +10475,12 @@ function cpLink(u){if(!u)return toast("is video ka link nahi mila");cpText(u);to
 let view="home";
 const VW={home:{f:homev,t:"Home",i:"home"},cmp:{f:cmp,t:"Competitors",i:"search"},
  fun:{f:funv,t:"Topic funnel",i:"filter"},
- ch:{f:chanv,t:"Channel analytics",i:"eye"},niche:{f:nichev,t:"Niche Finder",i:"target"},hist:{f:histv,t:"Channel history",i:"clock"},act:{f:actv,t:"Scan history",i:"list"},cmpc:{f:cmpc,t:"Channel comparison",i:"trophy"},deep:{f:deepv,t:"Deep analysis",i:"bars"},
+ realtime:{f:realtimev,t:"Real Time",i:"trend"},ch:{f:chanv,t:"Channel analytics",i:"eye"},niche:{f:nichev,t:"Niche Finder",i:"target"},hist:{f:histv,t:"Channel history",i:"clock"},act:{f:actv,t:"Scan history",i:"list"},cmpc:{f:cmpc,t:"Channel comparison",i:"trophy"},deep:{f:deepv,t:"Deep analysis",i:"bars"},
  ideas:{f:ideasv,t:"Winning topics to ideas",i:"trophy"},bank:{f:bankv,t:"Competitor bank",i:"layers"},mine:{f:mine,t:"My thumbnail",i:"image"},
  ai:{f:aipg,t:"AI thumbnail",i:"palette"},tl:{f:tl,t:"Title lab",i:"pen"},ab:{f:ab,t:"A/B variants",i:"ab"},hub:{f:hubv,t:"Testing hub",i:"ab"},
  own:{f:ownpg,t:"Your CTR and calibration",i:"trend"},gen:{f:genpg,t:"How thumbnails get generated",i:"spark"},
  help:{f:help,t:"How the tool works",i:"info"}};
-const NAVG=[["Main",["home"]],["Channel",["ch","niche","act","hist","cmpc","bank"]],["Work",["cmp","fun","deep","ideas","mine","ai","hub","own"]],["Help",["gen","help"]]];
+const NAVG=[["Main",["home"]],["Channel",["realtime","ch","niche","act","hist","cmpc","bank"]],["Work",["cmp","fun","deep","ideas","mine","ai","hub","own"]],["Help",["gen","help"]]];
 // Sidebar ka channel card — reference ke sidebar-top-block ki jagah, lekin sirf asli
 // data se: naam, subscribers, gini/mapi videos aur naap ki sachchi halat. Koi number
 // ghad ke nahi bhara.
@@ -11887,7 +11968,7 @@ function ideaPkCard(d){
  h+='<div class="lbl">Asli tags — channel ne khud lagaye the (koi andaaza nahi)</div><div class="tagrow">'+
    ((d.tags||[]).length?d.tags.map(t=>'<span class="chip">'+esc(t)+'</span>').join(""):'<span class="sub">is video par koi tags nahi mile</span>')+'</div>'+
    ((d.tags||[]).length?'<div class="bar" style="margin:8px 0 0"><button class="sm" onclick="cpText((IDEAPK.tags||[]).join(\', \'))">'+ico("copy",13)+'saare tags copy</button></div>':"")+
-   '<div class="lbl" style="margin-top:12px">Keywords — title+tags+description se gine gaye (ginti, andaza nahi)</div><div class="tagrow">'+
+   '<div class="lbl" style="margin-top:12px">Applied keywords — creator ke saare tags hi; alag public keyword field nahi, koi guess nahi</div><div class="tagrow">'+
    ((d.keywords||[]).length?d.keywords.map(w=>'<span class="chip">'+esc(w)+'</span>').join(""):'<span class="sub">kuch nahi mila</span>')+'</div>'+
    ((d.keywords||[]).length?'<div class="bar" style="margin:8px 0 0"><button class="sm" onclick="cpText((IDEAPK.keywords||[]).join(\', \'))">'+ico("copy",13)+'saare keywords copy</button></div>':"");
  if((d.topics||[]).length){h+='<div class="lbl" style="margin-top:12px">Topics jo is video ke audience se milte hain <small class="sub"> — model ka andaza ('+esc(d.model||"gemini")+'), aapka faisla</small></div>'+
@@ -11916,33 +11997,41 @@ function trpPoll(id){trpStop();TRP=setInterval(async()=>{let p;try{p=await j("/a
  const el=$("#trp");if(!el){trpStop();return}
  if(p.none)return;
  el.textContent=(p.stage==="ocr")?("progress: frame "+(p.done|0)+"/"+(p.total|0)+" OCR ho chuka — thora rukein"):("video ka sabse chhota format download ho raha hai — thora rukein");},4000)}
+function trOcrLabel(engine){return engine==="api"?"API — Gemini":engine==="local"?"Local — on-device":"Legacy — engine unspecified"}
+function trOcrControls(i,engine="local",busy=false){return '<label for="trOcrEngine'+i+'">Screen OCR engine</label> '+
+ '<select id="trOcrEngine'+i+'"'+(busy?' disabled':'')+'><option value="local"'+(engine!=="api"?' selected':'')+'>Local — on-device (no API quota)</option><option value="api"'+(engine==="api"?' selected':'')+'>API — Gemini (key quota / charges)</option></select> '+
+ '<button class="sm" onclick="trOcrGo('+i+')"'+(busy?' disabled style="opacity:.5;cursor:progress"':'')+'>'+ico("file",14)+'Screen text (OCR) laao</button>'}
 function trSecAt(i){const it=D.items[i],t=(D.tr||{})[it.id];
- if(TRJ&&TRJ.id===it.id)return '<div class="sec">'+(TRJ.ocr?"Screen text (OCR)":"Transcription")+'</div>'+
+ if(TRJ&&TRJ.id===it.id)return '<div class="sec">'+(TRJ.ocr?"Screen text (OCR) · "+trOcrLabel(TRJ.engine):"Transcription")+'</div>'+
   '<div class="sub"><span id="trp">'+(TRJ.ocr?"video ka sabse chhota format download ho raha hai…":"subtitles laaye ja rahe hain…")+'</span>'+(TRJ.ocr?' — chhoti video par ~1 minute, lambi (15+ minute) par 5–10 minute tak lag sakte hain, lekin ek hi baar; phir hamesha cache. Neeche wale button dubara dabane se doosra job nahi chalta — wahi kaam complete hoke milta hai.':' ek hi baar; dobara khulne par cache se seconds me.')+'</div>'+
   '<div class="bar"><button class="go" disabled style="opacity:.5;cursor:progress">'+ico("file",14)+'Transcription laao</button>'+
-  '<button class="sm" disabled style="opacity:.5;cursor:progress">'+ico("file",14)+'Screen text (OCR) laao</button></div>';
+  trOcrControls(i,TRJ.engine,true)+'</div>';
  if(t&&t.text){const ocr=t.kind==="ocr";
-  return '<div class="sec">'+(ocr?'Screen text (OCR) <small> — frames se padha gaya screen ka likha text; ye video ki awaz nahi</small>':'Transcription <small> — video ke apne subtitles, tool ka likha hua nahi</small>')+'</div>'+
+  return '<div class="sec">'+(ocr?'Screen text (OCR) · '+trOcrLabel(t.engine)+' <small> — frames se padha gaya screen ka likha text; ye video ki awaz nahi</small>':'Transcription <small> — video ke apne subtitles, tool ka likha hua nahi</small>')+'</div>'+
    '<div class="sub">'+esc(t.note||"")+(t.cached?' · ye pehle se cache me tha — dobara koi kharcha nahi':"")+(t.cut?' · text lamba tha, pehle 60,000 akshar dikhaye ja rahe hain':"")+(ocr&&t.frames?' · '+t.frames+' frames se padha gaya':"")+(ocr?' · neeche wala box scroll karein — har line time ke saath andar hai, sirf pehli kuch lines nahi':"")+'</div>'+
-   '<div class="trbox">'+esc(t.text)+'</div>';}
- if(t&&t.error){return '<div class="sec">Transcription</div><div class="err">'+esc(t.error)+'</div>'+
+   '<div class="trbox">'+esc(t.text)+'</div>'+
+   '<div class="bar"><button class="go" onclick="trGo('+i+')">'+ico("file",14)+'Transcription laao</button>'+trOcrControls(i,t.engine)+'</div>';}
+ if(t&&t.error){return '<div class="sec">'+(t.engine?'Screen text (OCR) · '+trOcrLabel(t.engine):'Transcription')+'</div><div class="err">'+esc(t.error)+'</div>'+
    '<div class="bar"><button class="go" onclick="trGo('+i+')">'+ico("file",14)+'phir se koshish karo</button>'+
-   '<button class="sm" onclick="trOcrGo('+i+')">'+ico("file",14)+'Screen text (OCR) laao</button></div>'+
+   trOcrControls(i,t.engine)+'</div>'+
    (t.no_ocr?'<div class="sub">is video par subtitles nahi, lekin screen par text likha hota hai (quiz/whiteboard type) to wo is rasta padha ja sakta hai — frames ka OCR, awaz nahi.</div>'
     :'<div class="sub">rate-limit ya network ki baat ho to thori der baad "phir se" dabayein; aur agar is video par subtitles hote hi na hon to screen-text OCR ka raasta hai — frames ka OCR, awaz nahi.</div>');}
  return '<div class="sec">Transcription <small> — sirf tab jab aap maange</small></div>'+
   '<div class="sub">is video ke subtitles laane ka kharcha: ek baar YouTube se subtitles (kuch second), phir hamesha cache. Kuch videos par subtitles hote hi nahi — wahan seedha likha jayega, jhooth nahi.</div>'+
   '<div class="bar"><button class="go" onclick="trGo('+i+')">'+ico("file",14)+'Transcription laao</button>'+
-  '<button class="sm" onclick="trOcrGo('+i+')">'+ico("file",14)+'Screen text (OCR) laao</button></div>'+
+  trOcrControls(i)+'</div>'+
   '<div class="sub">video khamosh hai ya sirf screen par text hai (quiz, slides)? Transcription khali aayega — doosra button us screen ka likha text frames se padhta hai (chhoti video par ~1 minute, lambi par 5–10 minute tak — live progress dikhegi; ek hi baar, phir cache).</div>';}
-async function trGo(i){const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id};zoom(i);
+async function trGo(i){if(TRJ)return toast("transcription/OCR ka kaam pehle se chal raha hai");const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id};zoom(i);
  let r;try{r=await j("/api/tr?id="+encodeURIComponent(it.id))}catch(e){r={error:e.message}}
  TRJ=null;if(r.error&&/subtitles YouTube par nahi/.test(r.error))r.no_ocr=1;
  D.tr[it.id]=r;zoom(i);if(r.error)toast("transcription: "+r.error)}
-async function trOcrGo(i){const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id,ocr:1};zoom(i);trpPoll(it.id);
- let r;try{r=await j("/api/tr?id="+encodeURIComponent(it.id)+"&ocr=1")}catch(e){r={error:e.message}}
- trpStop();TRJ=null;if(r.error)r.no_ocr=0;
- D.tr[it.id]=r;zoom(i);if(r.error)toast("screen text: "+r.error)}
+async function trOcrGo(i){if(TRJ)return toast("transcription/OCR ka kaam pehle se chal raha hai");
+ const it=D.items[i],engine=($("#trOcrEngine"+i)||{}).value==="api"?"api":"local";
+ if(engine==="api"&&!confirm("API screen OCR may upload up to 60 video frames to Gemini using your configured Gemini API key. This uses key quota and charges may apply. Continue?"))return;
+ D.tr=D.tr||{};TRJ={id:it.id,ocr:1,engine};zoom(i);trpPoll(it.id);
+ let r;try{r=await jp("/api/studio/tool",{kind:"source-context",q:it.id,method:"ocr",engine})}catch(e){r={error:e.message}}
+ trpStop();TRJ=null;r.engine=engine;if(r.error)r.no_ocr=0;
+ D.tr[it.id]=r;zoom(i);if(r.error)toast("screen text ("+trOcrLabel(engine)+"): "+r.error)}
 
 // Bulk transcription: chuni hui videos ke subtitles ek-ek karke — server jo pehle se
 // cache karta hai wo dobara network par jaata hi nahi, is liye bar-bar chalani par
@@ -11950,14 +12039,16 @@ async function trOcrGo(i){const it=D.items[i];D.tr=D.tr||{};TRJ={id:it.id,ocr:1}
 // ghanton me na badal jaye; baaki agle click me. Jo video bina subtitles ka nikla,
 // uski row usi waqt OCR ka raasta dikha deti hai — baad me dhoondhna nahi padta.
 let BQ=null;
-function bulkTr(ocr){if(!SEL.size)return toast("pehle videos chuno (card par tick ya Table me select)");
- const cap=ocr?4:15,ids=[...SEL].slice(0,cap);
- BQ={ids,ocr,st:{},done:0,skipped:SEL.size-ids.length};
+function bulkTr(ocr){if(BQ&&BQ.done<BQ.ids.length)return toast("bulk ka kaam pehle se chal raha hai");
+ if(!SEL.size)return toast("pehle videos chuno (card par tick ya Table me select)");
+ const cap=ocr?4:15,ids=[...SEL].slice(0,cap),engine=($("#bulkTrOcrEngine")||{}).value==="api"?"api":"local";
+ if(ocr&&engine==="api"&&!confirm("API screen OCR for "+ids.length+" videos (maximum 4 per launch) may upload up to 60 frames per video to Gemini using your configured Gemini API key. This uses key quota and charges may apply. Continue?"))return;
+ BQ={ids,ocr,engine,st:{},done:0,skipped:SEL.size-ids.length};
  (async()=>{for(const id of ids){BQ.st[id]="… chal raha hai";bqRender();
-   let r;try{r=await j("/api/tr?id="+encodeURIComponent(id)+(ocr?"&ocr=1":""))}catch(e){r={error:e.message}}
-   D.tr=D.tr||{};D.tr[id]=r;
-   const _n=(r.text||"").length;  // safai ke baad 400 ka cap hai — cap lage to "400+" dikhao, warna user ko lagega sirf itna hi mila
-   BQ.st[id]=r.ok?((r.cached?"pehle se cache me tha — 0 kharcha ✓ ":"aa gaya ✓ ")+(_n>=400?"400+ akshar (screen par aur bhi tha — dikhaya gaya hissa 400)":_n+" akshar"))
+   let r;try{r=ocr?await jp("/api/studio/tool",{kind:"source-context",q:id,method:"ocr",engine}):await j("/api/tr?id="+encodeURIComponent(id))}catch(e){r={error:e.message}}
+   if(ocr)r.engine=engine;D.tr=D.tr||{};D.tr[id]=r;
+   const _n=(r.text||"").length;
+   BQ.st[id]=r.ok?((r.cached?"pehle se cache me tha — 0 kharcha ✓ ":"aa gaya ✓ ")+_n+" akshar"+(r.cut?" (text truncated)":""))
                  :("✗ "+String(r.error||"?").slice(0,110)+(/subtitles|429/i.test(String(r.error||""))?" — is par screen text OCR kaam kar sakta hai: video zoom karke 'Screen text (OCR)' button, ya neeche wala bulk OCR":""));
    BQ.done++;bqRender()}
   toast((ocr?"screen-text OCR":"subtitles")+" bulk khatam — "+ids.filter(x=>String(BQ.st[x]).indexOf("✓")>=0).length+"/"+ids.length+" ko mila"+(BQ.skipped?(" · "+BQ.skipped+" chhodi (limit "+cap+"/click — agle click me chalaayein)"):""))})();
@@ -11965,10 +12056,10 @@ function bulkTr(ocr){if(!SEL.size)return toast("pehle videos chuno (card par tic
 function bqRender(){if(!BQ)return;let b=document.getElementById("bulkq");
  if(!b){b=document.createElement("div");b.id="bulkq";b.className="card";b.style.cssText="position:fixed;right:16px;bottom:56px;max-width:420px;max-height:60vh;overflow:auto;z-index:60";document.body.appendChild(b)}
  const nm=id=>{const it=((D&&D.items)||[]).find(x=>x.id===id);return it?(it.title||"").slice(0,52):id};
- b.innerHTML='<h3>Bulk '+(BQ.ocr?"screen-text OCR":"subtitles")+' — '+BQ.done+"/"+BQ.ids.length+'</h3>'+
+ b.innerHTML='<h3>Bulk '+(BQ.ocr?"screen-text OCR · "+trOcrLabel(BQ.engine):"subtitles")+' — '+BQ.done+"/"+BQ.ids.length+'</h3>'+
   '<div class="sub">ek-ek karke, order wahi; jo pehle se cache me hai use koi network kharcha nahi. '+(BQ.ocr?"OCR video download + frames padhta hai — is liye ek video 1–3 minute le sakta hai, limit 4/click.":"Limit 15/click — baaki agle click me.")+(BQ.skipped?'<br><b>'+BQ.skipped+' chhodi gayi</b> (click ki limit '+ (BQ.ocr?4:15) +') — chahen to dobara chalaayein.':"")+'</div>'+
   BQ.ids.map(id=>'<div class="sub" style="margin:4px 0"><b>'+esc(nm(id))+'</b><br>'+esc(BQ.st[id]||"khamosh")+'</div>').join("")+
-  '<div class="bar"><button class="sm" onclick="document.getElementById(\'bulkq\').remove();BQ=null">band karo</button></div>'}
+  '<div class="bar"><button class="sm" onclick="document.getElementById(\'bulkq\').remove();if(BQ.done>=BQ.ids.length)BQ=null">band karo</button></div>'}
 
 // ---------- us video ki ASLI listing (tags/description/chapters) + CTR/retention ----------
 // Sach: YouTube ka CTR aur retention sirf channel ke malik ko milta hai (Analytics API bhi
@@ -12016,7 +12107,7 @@ async function vq(i){const it=D.items[i],el=$("#vq");if(!el)return;
   '<div class="sub">Title ke jo shabd tags/description me maujood hain: '+(S.hit||[]).map(w=>'<span class="chip" style="color:var(--grn)">'+esc(w)+'</span>').join("")+'</div>'+
   '<div class="sub">Jo shabd sirf title me hain (kahin dohraye nahi gaye): '+(S.miss||[]).map(w=>'<span class="chip" style="color:var(--red)">'+esc(w)+'</span>').join("")+'</div></div>'+
   '<div><div class="sec">ASLI description — poori, jaisi usne likhi ('+((m.desc||"").length)+' ch)</div>'+
-  '<div class="card"><pre class="desc">'+esc(m.desc||"(kuch nahi likha)")+'</pre></div>'+
+  '<div class="card"><pre class="desc"><span>'+esc(m.desc||"(kuch nahi likha)").replace(/\r/g,'&#13;')+'</span></pre></div>'+
   (ch?('<div class="sec">ASLI chapters ('+(m.chaps||[]).length+')</div><table><tr><th scope="col">time</th><th scope="col">jo usne likha</th></tr>'+ch+'</table>'):"")+
   '</div></div>'+
   '<div class="sec">CTR aur retention — imaandari se</div><div class="card"><h3>Asli CTR/retention: sirf aapke paan</h3>'+
@@ -12901,13 +12992,29 @@ function chMeTable(){
    '</tbody></table><div class="sub">Every channel scan is its own file — the <b>Competitors</b> view has the full thumbnail/OCR analysis of every video inside it, <b>Deep analysis</b> has the pattern across that channel’s <b>measured</b> videos (a new scan measures its whole counted listing, not a sample — if a row here shows fewer measured than counted, the rest is still openable with “Poora channel naap lo”), and the <b>Winning topics</b> view lists that channel’s winning topics.</div></div>'}
 function openChan(id){cur=id;D=null;IDEAS=null;go("ch")}
 function chSearchCard(){
-  return '<div class="card"><h3>Find or open a channel</h3><div class="bar">'+
-   '<input type="text" id="cq" placeholder="name, @handle, UC… id, or a youtube.com/@handle link" style="min-width:340px" value="'+esc(CQ)+'" onkeydown="if(event.key===\'Enter\')goChan()">'+
-   '<button class="go" onclick="goChan()">'+ico("search",14)+'Open channel</button>'+
-   '<button class="sm" onclick="chFindOnly()">'+ico("search",14)+'Search only</button>'+
-    '<button class="sm" onclick="rdGo()" title="Jo channels kam videos par lakhon views kama rahe hain — niche se dhoondo, asli gin se">'+ico("spark",14)+'Chhota lekin tez (niche radar)</button></div>'+
-    '<div class="sub">Up to <b>50 channels</b> by name — they come from YouTube’s own <b>Channel</b> filter; the name, @handle, subscriber count and verified badge are YouTube’s data, not written by this tool. Opening a channel counts its <b>/videos</b> and <b>/shorts</b> listings (up to <b>400</b>; past that a <b>+</b> appears, because counting stops there), and then <b>measures every counted video</b> — longs and shorts alike — with its <b>real</b> listing fields (tags, description, chapters, likes, comments, category) plus thumbnail measurements. A full channel takes time; the progress bar streams and each measured video lands in the table as it finishes — nothing is skipped or sampled.</div>'+
-   '<div class="sub"><b>Five things that are not in YouTube’s public data</b> — so this tool will not invent them: (1) the channel’s <b>joined</b> date (Niche Finder ke RSS feed se channel-banane-ka-din milta hai — sirf wahan), (2) the channel’s <b>total views</b> (only the sum of counted videos is available), (3) whether it is <b>monetized</b>, (4) <b>RPM/CPM</b>, (5) watch time. Instead this tool shows what is actually there: the subscriber 1000+ condition is visible, watch-hours are counted as an <b>upper bound</b>, and earnings are given as a <b>range</b> — until you enter your own Studio RPM.</div></div>'}
+ return '<div class="card"><h3>Explore a channel in depth</h3><p class="sub">Search by name, then open a channel to analyse its videos, thumbnails and upload patterns.</p><div class="bar">'+
+ '<input aria-label="Search channels" id="cq" placeholder="Channel name, @handle or YouTube URL" value="'+esc(CQ)+'" onkeydown="if(event.key===\'Enter\')goChan()">'+
+ '<button class="go" onclick="goChan()">Open channel</button><button onclick="chFindOnly()">Search by name</button><button class="sm" onclick="rdGo()">Discover a niche</button></div>'+
+ '<details style="margin-top:16px"><summary>Data coverage &amp; availability</summary><p class="sub">Deep analysis uses saved scans, with up to 400 entries per listing. It is separate from the fresh public counts above. CTR, watch time, monetization status and actual revenue require owner data from YouTube Studio. Earnings elsewhere are estimates.</p></details></div>'}
+let LIVE={q:"",data:null,error:"",busy:false,auto:true},liveInputTimer=null;
+function realtimev(){$('#main').innerHTML='<h2>'+ico('trend',22)+' Real Time</h2><p class="sub">Paste a channel UID, @handle or YouTube channel link. Public statistics load automatically.</p>'+liveCard()}
+function liveInput(value){LIVE.q=value.trim();LIVE.error='';clearTimeout(liveInputTimer);
+ if(LIVE.data&&LIVE.data.query!==LIVE.q)LIVE.data=null;
+ const body=$('#livebody');if(body)body.innerHTML=liveBody();
+ if(LIVE.q)liveInputTimer=setTimeout(()=>{if(view==='realtime')liveFetch()},650)}
+function liveCard(){return '<section class="card live-card" aria-label="Fresh channel statistics"><div class="live-head"><div><div class="live-eyebrow">CHANNEL INTELLIGENCE</div><h3>Live channel overview</h3><p class="sub">Fresh public statistics for any accessible YouTube channel.</p></div><label><input type="checkbox" '+(LIVE.auto?'checked':'')+' onchange="LIVE.auto=this.checked"> Refresh every 60s</label></div><div class="live-form"><input id="liveq" aria-label="Channel handle or URL" placeholder="UC… channel ID, @handle or youtube.com/@channel" oninput="liveInput(this.value)" value="'+esc(LIVE.q)+'" onkeydown="if(event.key===\'Enter\')liveFetch()"><button class="go" id="livebutton" onclick="liveFetch()" '+(LIVE.busy?'disabled':'')+'>'+(LIVE.busy?'Fetching…':'Get fresh stats')+'</button></div><div id="livebody" aria-live="polite">'+liveBody()+'</div></section>'}
+function liveBody(){const d=LIVE.data;const err=LIVE.error?'<div class="err">'+esc(LIVE.error)+'</div>':'';
+ if(!d)return err+'<div class="live-note">No channel loaded yet. Counts come from YouTube; unavailable values stay blank. Uses your configured YouTube API key.</div>';
+ const num=n=>n==null?'—':Number(n).toLocaleString();return err+'<div class="live-profile">'+(d.avatar?'<img src="'+esc(d.avatar)+'" alt="">':'')+'<div><strong>'+esc(d.name)+'</strong><div class="sub">'+esc(d.handle)+'</div></div></div><div class="live-metrics">'+[['Subscribers',d.subscribers],['Total channel views',d.views],['Public videos',d.videos]].map(x=>'<div><span class="sub">'+x[0]+'</span><b>'+num(x[1])+'</b></div>').join('')+'</div><div class="live-state">'+(LIVE.error?'Last successful fetch':'Fetched')+' '+esc(new Date(d.fetched_at).toLocaleString())+' · '+esc(d.source)+'</div><p class="live-note">YouTube rounds public subscriber counts. Refresh retrieves the latest API response; YouTube may update counts with a delay. These are public statistics, not a second-by-second Studio feed.</p>'}
+async function liveFetch(){clearTimeout(liveInputTimer);if(LIVE.busy)return;
+ const input=$('#liveq');const q=(input?input.value:LIVE.q).trim();if(!q)return;
+ LIVE.q=q;LIVE.busy=true;LIVE.error='';if(LIVE.data&&LIVE.data.query!==q)LIVE.data=null;
+ const button=$('#livebutton');if(button){button.disabled=true;button.textContent='Fetching…'}
+ try{const r=await j('/api/chlive?q='+encodeURIComponent(q));if(r.error)throw Error(r.error);if(LIVE.q===q)LIVE.data={...r,query:q}}
+ catch(e){if(LIVE.q===q)LIVE.error=e.message}
+ finally{LIVE.busy=false;const body=$('#livebody');if(body)body.innerHTML=liveBody();const b=$('#livebutton');if(b){b.disabled=false;b.textContent='Refresh stats'}
+ if(LIVE.q&&LIVE.q!==q&&view==='realtime')liveFetch()}}
+setInterval(()=>{if(view==='realtime'&&LIVE.auto&&LIVE.q&&!document.hidden&&$('#livebody'))liveFetch()},60000);
 async function chFindOnly(){
   const q=(($("#cq")||{}).value||CQ||"").trim();if(!q)return toast("kuch likho");CQ=q;
   const el=$("#chout");if(el)el.innerHTML=skelTable(8)+'<div>'+skelLines(2,"50 channels dhoondhe ja rahe hain…")+'</div>';
@@ -13457,7 +13564,7 @@ function stDet(r){
  if(it.sd)h+='<details class="kdet" style="margin-top:10px"><summary>'+ico("bars",14)+'score ka poora hisaab kholo</summary>'+
   '<div style="padding-top:8px">'+whyCard(it)+'</div></details>';
  if((it.tags||[]).length)h+='<div class="lbl">Asli tags — channel ne khud lagaye the (koi andaaza nahi)</div><div class="tagrow">'+
-   it.tags.slice(0,30).map(t=>'<span class="chip">'+esc(t)+'</span>').join("")+'</div>';
+   it.tags.map(t=>'<span class="chip">'+esc(t)+'</span>').join("")+'</div>';
  // SponsorBlock ka hissa — community marks. Jo video API me aayi hi nahi us par "koi
  // mark nahi" likha jaayega, "0 seconds ads" kabhi nahi — ye farq sach ka farq hai.
  const sdd=(D.spon||{})[it.id];
@@ -13492,10 +13599,10 @@ const m=r.meta,S=r.seo||{},hit=S.hit||[],miss=S.miss||[];
 const dl=(m.desc||"").length,ch=m.chaps||[];
 const chip=(t,c)=>'<span class="chip"'+(c?' style="color:'+c+'"':"")+'>'+esc(t)+'</span>';
 let h='';
-// Keywords: ye us video ki APNI listing ka hisaab hai — title ke kaun se shabd
-// tags/description me dohraye gaye aur kaun se sirf title me hain. Gin-ti khud
-// usi text se hui hai, koi suggestion tool ka andaaza nahi.
-h+='<div class="lbl">Keywords — title ke shabd kahan dohraye gaye (asli gin-ti)</div>'+
+h+='<div class="lbl">Applied keywords / tags — creator ki poori list</div><div class="tagrow">'+
+ (m.tags||[]).map(t=>chip(t)).join('')+((m.tags||[]).length?'':'<span class="sub">koi public tags nahi mile</span>')+'</div>'+
+ '<div class="sub">Ye creator ke tags hi hain; alag public video-keywords field nahi. Koi shabd guess nahi kiya.</div>'+
+ '<div class="lbl">Title-word comparison — applied keywords nahi</div>'+
  '<div class="tagrow" style="margin-bottom:4px">'+
   hit.map(w=>chip(w,"var(--ok)")).join("")+miss.map(w=>chip(w,"var(--bad)")).join("")+
   (hit.length||miss.length?"":'<span class="sub">is video ka title/tags itna short hai ke tulna nahi ho saki</span>')+'</div>'+
@@ -13511,7 +13618,7 @@ h+='<div class="lbl">Keywords — title ke shabd kahan dohraye gaye (asli gin-ti
   (m.age?'<span class="chip">age <b>'+esc(m.age)+'</b></span>':"")+
   (m.up?('<span class="chip">upload <b>'+esc(stDate(m.up.replace(/^(\d{4})(\d{2})(\d{2})$/,"$1-$2-$3")))+'</b></span>'):"")+'</div>';
 h+='<div class="lbl" style="margin-top:10px">Poori description — jaisi usne likhi ('+fmt(dl)+' characters)</div>'+
-  '<pre class="desc">'+esc(m.desc||"(kuch nahi likha)")+'</pre>'+
+  '<pre class="desc"><span>'+esc(m.desc||"(kuch nahi likha)").replace(/\r/g,'&#13;')+'</span></pre>'+
   (dl>700?'<button class="sm" data-on="0" onclick="stDescX(this)">'+ico("down",13)+' poori description kholo</button>':"");
 h+='<div class="lbl" style="margin-top:10px">Chapters — '+
   (ch.length?'asli, unhi waqton ke saath jo usne lagaye ('+ch.length+')':'is video me chapters nahi bane (ye kami hai, andaza nahi)')+'</div>';
@@ -13570,6 +13677,7 @@ function stSelUpd(){const old=document.getElementById("selbar");if(old)old.remov
   '</span><span class="sp" style="flex:1"></span>'+
   '<button class="go sm" onclick="stSelCsv()">'+ico("down",13)+"Selection ka CSV</button>"+
   '<button class="sm" onclick="bulkTr(false)">'+ico("file",13)+"Subtitles laao (bulk, 15 tak)</button>"+
+  '<label for="bulkTrOcrEngine">Bulk screen OCR engine</label><select id="bulkTrOcrEngine"><option value="local" selected>Local — on-device (no API quota)</option><option value="api">API — Gemini (key quota / charges)</option></select>'+
   '<button class="sm" onclick="bulkTr(true)">'+ico("file",13)+"Screen text OCR (bulk, 4 tak)</button>"+
   '<button class="sm" onclick="stSelCopy()">'+ico("copy",13)+"Titles copy</button>"+
   '<button class="sm" onclick="stSelClr()">Chunav saaf</button>';
@@ -13727,7 +13835,7 @@ async function chanv(){const _t=RTN;
   const d=(cur&&D&&D.id===cur)?D:(cur?await ensureData():null);
    if(_t!==RTN)return;
   let h='<h2>'+ico("eye",22)+' Channel analytics</h2>'+
-   '<div class="sub">The whole channel: search up to 50 channels, then open one — listing, shorts vs longs, each video’s real listing fields (tags/description/category), thumbnail measurements, upload routine, niche, and estimated earnings. Every number below is <b>a count</b>; where counting was not possible, it says so.</div>'+
+   '<div class="sub">Track public performance, explore uploads, and find your next opportunity. Fresh statistics and saved deep analysis are clearly separated.</div>'+
    chSearchCard();
  if(CHJ)h+='<div class="card" id="chout"><h3>Opening the channel</h3><div id="chp"></div><div class="sub">Counting the listing (up to 400, ~5 seconds) → each video’s real listing fields + thumbnail (~0.5s per video, once; then cached) → OCR and measurement. This runs in the background; you can go elsewhere and come back.</div></div>';
   if(CHC)h+=chCands();
@@ -14239,6 +14347,12 @@ function help(){$("#main").innerHTML='<h2>'+ico("info",18)+' Kaise kaam karta ha
 </script></body></html>"""
 
 
+# Extension services keep the original analysis engine intact.
+import sys as _sys
+import studio_backend as STUDIO
+STUDIO.configure(_sys.modules[__name__])
+
+
 if __name__ == "__main__":
     import webbrowser
     for d in (OUT, THUMB_DIR, CHK_DIR, TMP_DIR, SCN_DIR, REG_DIR, OCR_DIR, AI_DIR):
@@ -14278,6 +14392,7 @@ if __name__ == "__main__":
     # Channel History ka candlestick usi data se banta hai. Server band = readings
     # band; jitni ghanti tool chala utni hi candles bhari milti hain — sach.
     threading.Thread(target=_autosnap_loop, daemon=True).start()
+    STUDIO.start_worker()
     print("pehla jawab ", round(time.perf_counter() - t0, 2), "second me — engines background me tayyar honge")
     # Browser server BIND hone ke BAAD khulta hai (bat file se pehle kholne par
     # browser "refused/loading" dikha kar atak jata tha — ye wahi race thi jo
