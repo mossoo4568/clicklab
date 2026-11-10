@@ -156,9 +156,12 @@ Is zip ke andar koi key nahi hai — jo bhi use kare, apni key khud lagaye.
 
 ## Install kaise karein
 
-Windows par: folder kholo, `setup.bat` double-click. Wo Python check/install karta hai,
-`requirements.txt` ki packages lagata hai, aur Tesseract (fallback OCR) install karta
-hai. Kuch optional package fail ho to bhi tool chalta hai — setup khud batata hai ke
+Windows par: folder kholo, `setup.bat` double-click. Wo Python 3.12 (winget se agar
+missing ho), project ka `.venv`, `requirements.txt`, FFmpeg + `ffprobe`, aur Tesseract
+OCR check/install karta hai. `ClickLab.bat` pehle isi `.venv` ko use karta hai, isliye
+global Python/pip ki zaroorat nahi rehti. Setup kisi API key, `thumb_output`, report,
+model ya purani user history ko repo se download nahi karta; keys user locally add karta hai.
+Kuch optional package fail ho to bhi tool chalta hai — setup khud batata hai ke
 kis ka asar kya hoga.
 
 Manual tareeqa: `python -m pip install -r requirements.txt`.
