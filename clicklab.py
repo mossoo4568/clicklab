@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import traceback
@@ -9050,6 +9051,200 @@ def export_scan(sid, fmt="csv"):
 
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".bmp": "image/bmp"}
 
+def media_download(vid, kind, quality, title, container="mp4"):
+    """Download a user-authorized YouTube media asset through the local yt-dlp install."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(vid or "")):
+        return {"error": "Invalid YouTube video ID."}
+    if kind not in ("audio", "video"):
+        return {"error": "Choose audio or video."}
+    quality = str(quality or "best")
+    if kind == "audio" and quality not in ("128", "192", "320"):
+        return {"error": "Unsupported audio quality."}
+    if kind == "video" and quality not in ("best", "360", "480", "720", "1080"):
+        return {"error": "Unsupported video quality."}
+    audio_formats = ("mp3", "wav", "m4a", "flac", "opus")
+    video_formats = ("mp4", "webm", "mkv")
+    if container not in (audio_formats if kind == "audio" else video_formats):
+        return {"error": "Unsupported media format."}
+    ytdlp = find_ytdlp()
+    with tempfile.TemporaryDirectory(prefix="clicklab-media-") as td:
+        out = str(Path(td) / "%(title).120s-%(id)s.%(ext)s")
+        url = "https://www.youtube.com/watch?v=" + vid
+        if kind == "audio":
+            cmd = [ytdlp, "--no-warnings", "--no-playlist", "-x", "--audio-format", container, "--audio-quality", quality + "K", "-o", out, url]
+        else:
+            selector = "bestvideo[height<=" + quality + "]+bestaudio/best[height<=" + quality + "]" if quality != "best" else "bestvideo+bestaudio/best"
+            cmd = [ytdlp, "--no-warnings", "--no-playlist", "-f", selector, "--merge-output-format", container, "-o", out, url]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            return {"error": "Download timed out. Try a lower quality."}
+        if p.returncode != 0:
+            msg = (p.stderr or p.stdout or "yt-dlp failed").strip().splitlines()[-1][:300]
+            return {"error": msg}
+        files = [x for x in Path(td).iterdir() if x.is_file()]
+        if not files:
+            return {"error": "No media file was produced. Check the video availability and permissions."}
+        f = files[0]
+        ext = f.suffix.lower()
+        ctype = ("audio/" + ("mpeg" if container == "mp3" else container)) if kind == "audio" else ("video/webm" if container == "webm" else "video/x-matroska" if container == "mkv" else "video/mp4")
+        safe = re.sub(r"[^A-Za-z0-9._ -]", "", str(title or "clicklab-video")).strip()[:80] or "clicklab-video"
+        return {"body": f.read_bytes(), "ctype": ctype, "disp": 'attachment; filename="%s%s"' % (safe, ext)}
+
+def local_video_edit(data):
+    """Apply ordinary edits to a user-supplied local video; no fingerprint evasion."""
+    if not data.get("rights"):
+        return {"error": "Confirm that you own this video or have a licence to edit it."}
+    raw = base64.b64decode(str(data.get("b64") or "").split(",", 1)[-1])
+    if not raw or len(raw) > 1024 * 1024 * 1024:
+        return {"error": "Video is empty or larger than 1 GB."}
+    speed = float(data.get("speed") or 1); volume = float(data.get("volume") or 1)
+    brightness = float(data.get("brightness") or 0); contrast = float(data.get("contrast") or 1); saturation = float(data.get("saturation") or 1)
+    if not .25 <= speed <= 4 or not 0 <= volume <= 3 or not -1 <= brightness <= 1 or not .25 <= contrast <= 3 or not 0 <= saturation <= 3:
+        return {"error": "Edit values are outside the supported range."}
+    start = max(0, float(data.get("trim_start") or 0)); end = data.get("trim_end")
+    end = float(end) if str(end or "").strip() else None
+    if end is not None and end <= start: return {"error": "Trim end must be greater than trim start."}
+    reframe = str(data.get("reframe") or "none")
+    frames = {"none": None, "16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080)}
+    if reframe not in frames: return {"error": "Unsupported reframe preset."}
+    fade = float(data.get("fade") or 0)
+    if not 0 <= fade <= 10: return {"error": "Fade must be between 0 and 10 seconds."}
+    captions = str(data.get("captions") or "")
+    if len(captions) > 1500000: return {"error": "Caption file is too large (max 1 MB)."}
+    if captions.strip():
+        captions = base64.b64decode(captions.split(",", 1)[-1]).decode("utf-8", "replace") if captions.startswith("data:") else captions
+        if "-->" not in captions: return {"error": "Caption file must be SRT with --> timing lines."}
+    with tempfile.TemporaryDirectory(prefix="clicklab-edit-") as td:
+        src = Path(td) / "source.bin"; out = Path(td) / "clicklab-edited.mp4"; src.write_bytes(raw)
+        vf = ["setpts=PTS-STARTPTS", "eq=brightness=%s:contrast=%s:saturation=%s" % (brightness, contrast, saturation), "setpts=PTS/%s" % speed]
+        af = ["asetpts=PTS-STARTPTS", "volume=%s" % volume]
+        if start: vf.insert(0, "trim=start=%s" % start); af.insert(0, "atrim=start=%s" % start)
+        if end is not None: vf.insert(1 if start else 0, "trim=end=%s" % end); af.insert(1 if start else 0, "atrim=end=%s" % end)
+        if data.get("denoise"): af.append("afftdn")
+        atempo = speed
+        while atempo < .5: af.append("atempo=0.5"); atempo /= .5
+        while atempo > 2: af.append("atempo=2"); atempo /= 2
+        af.append("atempo=%s" % atempo)
+        if data.get("normalize"): af.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+        if frames[reframe]:
+            w, h = frames[reframe]
+            vf.append("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1" % (w, h, w, h))
+        if fade:
+            try:
+                probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)], capture_output=True, text=True, timeout=60)
+                duration = float(probe.stdout.strip())
+            except (subprocess.TimeoutExpired, ValueError):
+                duration = None
+            if duration:
+                span = max(0.0, ((end if end is not None else duration) - start) / speed)
+                d = min(fade, span / 2)
+                if d > 0:
+                    vf += ["fade=t=in:st=0:d=%s" % d, "fade=t=out:st=%s:d=%s" % (max(0, span - d), d)]
+                    af += ["afade=t=in:st=0:d=%s" % d, "afade=t=out:st=%s:d=%s" % (max(0, span - d), d)]
+        if captions.strip():
+            srt = Path(td) / "captions.srt"; srt.write_text(captions, encoding="utf-8")
+            vf.append("subtitles=filename='%s'" % str(srt).replace("\\", "/").replace(":", "\\:"))
+        cmd = ["ffmpeg", "-y", "-i", str(src), "-vf", ",".join(vf), "-af", ",".join(af), "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+        try: p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        except subprocess.TimeoutExpired: return {"error": "Video edit timed out."}
+        if p.returncode or not out.exists(): return {"error": (p.stderr or "FFmpeg edit failed").splitlines()[-1][:300]}
+        safe = re.sub(r"[^A-Za-z0-9._ -]", "", Path(str(data.get("name") or "video")).stem).strip()[:80] or "video"
+        body = base64.b64encode(out.read_bytes()).decode("ascii")
+        return {"base64": body, "bytes": out.stat().st_size, "name": safe + "-edited.mp4"}
+
+def audio_metrics(path):
+    """Measure peak, RMS and clipping from decoded PCM; observed values, not estimates."""
+    if np is None:
+        return None
+    p = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "48000", "-"], capture_output=True, timeout=300)
+    if p.returncode or not p.stdout:
+        return None
+    x = np.frombuffer(p.stdout, dtype="<f4")
+    if not x.size:
+        return None
+    peak = float(np.max(np.abs(x))); rms = float(np.sqrt(np.mean(x * x)))
+    db = lambda v: round(20 * math.log10(v), 2) if v > 0 else None
+    return {"peak_dbfs": db(peak), "rms_dbfs": db(rms),
+            "clipped_pct": round(100 * float(np.mean(np.abs(x) >= .999)), 3),
+            "seconds": round(x.size / 48000, 2)}
+
+def local_audio_edit(data):
+    """Clean and level a user-supplied local audio file; ordinary quality edits only."""
+    if not data.get("rights"):
+        return {"error": "Confirm that you own this audio or have a licence to edit it."}
+    if np is None:
+        return {"error": "Audio measurement needs NumPy. Install requirements.txt and retry."}
+    raw = base64.b64decode(str(data.get("b64") or "").split(",", 1)[-1])
+    if not raw or len(raw) > 300 * 1024 * 1024:
+        return {"error": "Audio is empty or larger than 300 MB."}
+    fmt = str(data.get("format") or "wav")
+    if fmt not in ("wav", "mp3"): return {"error": "Choose WAV or MP3 output."}
+    volume = float(data.get("volume") if str(data.get("volume") or "").strip() else 1)
+    start = max(0.0, float(data.get("trim_start") or 0)); end = data.get("trim_end")
+    end = float(end) if str(end or "").strip() else None
+    fade_in = float(data.get("fade_in") or 0); fade_out = float(data.get("fade_out") or 0)
+    highpass = int(data.get("highpass") or 0)
+    target = str(data.get("loudness") or "off")
+    eq = str(data.get("eq") or "flat")
+    if not 0 <= volume <= 3 or not 0 <= fade_in <= 30 or not 0 <= fade_out <= 30:
+        return {"error": "Volume must be 0–3 and fades 0–30 seconds."}
+    if end is not None and end <= start: return {"error": "Trim end must be greater than trim start."}
+    if highpass not in (0, 60, 80, 100, 120): return {"error": "Unsupported high-pass frequency."}
+    if target not in ("off", "-23", "-16", "-14"): return {"error": "Unsupported loudness target."}
+    eq_filters = {"flat": [],
+                  "voice": ["equalizer=f=120:t=q:w=1:g=-2", "equalizer=f=3000:t=q:w=1:g=2"],
+                  "warm": ["equalizer=f=200:t=q:w=1:g=2", "equalizer=f=8000:t=q:w=1:g=-2"],
+                  "bright": ["equalizer=f=200:t=q:w=1:g=-2", "equalizer=f=8000:t=q:w=1:g=2"]}
+    if eq not in eq_filters: return {"error": "Unsupported EQ preset."}
+    with tempfile.TemporaryDirectory(prefix="clicklab-audio-") as td:
+        src = Path(td) / "source.bin"; out = Path(td) / ("clicklab-audio." + fmt); src.write_bytes(raw)
+        before = audio_metrics(src)
+        if before is None:
+            return {"error": "This file could not be decoded as audio. Use WAV, MP3, M4A, FLAC or OGG."}
+        af = ["asetpts=PTS-STARTPTS"]
+        if start: af.insert(0, "atrim=start=%s" % start)
+        if end is not None: af.insert(1 if start else 0, "atrim=end=%s" % end)
+        if highpass: af.append("highpass=f=%d" % highpass)
+        if data.get("denoise"): af.append("afftdn")
+        af.extend(eq_filters[eq])
+        if volume != 1: af.append("volume=%s" % volume)
+        if target != "off": af.append("loudnorm=I=%s:TP=-1.5:LRA=11" % target)
+        if fade_in: af.append("afade=t=in:st=0:d=%s" % fade_in)
+        if fade_out:
+            length = (end if end is not None else before["seconds"]) - start
+            af.append("afade=t=out:st=%s:d=%s" % (max(0, length - fade_out), fade_out))
+        cmd = ["ffmpeg", "-y", "-i", str(src), "-af", ",".join(af), "-ar", "48000"]
+        cmd += ["-c:a", "libmp3lame", "-b:a", "192k"] if fmt == "mp3" else ["-c:a", "pcm_s16le"]
+        cmd.append(str(out))
+        try: p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired: return {"error": "Audio edit timed out."}
+        if p.returncode or not out.exists(): return {"error": (p.stderr or "FFmpeg audio edit failed").splitlines()[-1][:300]}
+        after = audio_metrics(out)
+        safe = re.sub(r"[^A-Za-z0-9._ -]", "", Path(str(data.get("name") or "audio")).stem).strip()[:80] or "audio"
+        return {"base64": base64.b64encode(out.read_bytes()).decode("ascii"),
+                "bytes": out.stat().st_size, "name": safe + "-cleaned." + fmt,
+                "format": fmt, "before": before, "after": after}
+
+def auto_edit_video(vid, title):
+    """Create a standard polish export for a video the user owns or is licensed to use."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(vid or "")):
+        return {"error": "Invalid YouTube video ID."}
+    with tempfile.TemporaryDirectory(prefix="clicklab-auto-edit-") as td:
+        src = Path(td) / "source.%(ext)s"; merged = Path(td) / "source.mp4"; out = Path(td) / "auto-edited.mp4"
+        cmd = [find_ytdlp(), "--no-warnings", "--no-playlist", "-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4", "-o", str(src), "https://www.youtube.com/watch?v=" + vid]
+        try: p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired: return {"error": "Source download timed out."}
+        candidates = list(Path(td).glob("source.*"))
+        if p.returncode or not candidates: return {"error": (p.stderr or "Could not read the source video").splitlines()[-1][:300]}
+        source = merged if merged.exists() else candidates[0]
+        vf = "eq=brightness=0.01:contrast=1.03:saturation=1.03"
+        af = "loudnorm=I=-16:TP=-1.5:LRA=11,afftdn"
+        p = subprocess.run(["ffmpeg", "-y", "-i", str(source), "-vf", vf, "-af", af, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)], capture_output=True, text=True, timeout=1800)
+        if p.returncode or not out.exists(): return {"error": (p.stderr or "Auto edit failed").splitlines()[-1][:300]}
+        safe = re.sub(r"[^A-Za-z0-9._ -]", "", str(title or "video")).strip()[:80] or "video"
+        return {"body": out.read_bytes(), "ctype": "video/mp4", "disp": 'attachment; filename="%s-auto-edited.mp4"' % safe}
+
 
 def live_channel(query):
     """Uncached public statistics. Never substitute saved scans for fresh data."""
@@ -9130,6 +9325,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, STUDIO.tool_run(d.get("kind", ""), d))
             if u.path == "/api/studio/workspace":
                 return self._send(200, STUDIO.workspace(d.get("action", "list"), d))
+            if u.path == "/api/video-edit":
+                return self._send(200, local_video_edit(d))
+            if u.path == "/api/audio-edit":
+                return self._send(200, local_audio_edit(d))
             if u.path == "/api/upload":
                 name = re.sub(r"[^\w.\-]", "", (d.get("name") or "thumb.png"))
                 b = d.get("b64") or ""
@@ -9239,6 +9438,16 @@ class H(BaseHTTPRequestHandler):
                                   ("abhi load ho raha hai" if not _SK_DONE else "koi semantic model nahi")),
                             "cv": bool(cv2), "np": bool(np)},
                     "warm": eng_state(), "eta": meas_eta(1), "workers": [WORKERS, WORKERS2]})
+            if u.path == "/api/media-download":
+                r = media_download(q.get("vid") or "", q.get("kind") or "video", q.get("quality") or "best", q.get("title") or "clicklab-video", q.get("format") or "mp4")
+                if r.get("error"):
+                    return self._send(400, r)
+                return self._send(200, r["body"], r["ctype"], r["disp"])
+            if u.path == "/api/auto-edit":
+                r = auto_edit_video(q.get("vid") or "", q.get("title") or "clicklab-video")
+                if r.get("error"):
+                    return self._send(400, r)
+                return self._send(200, r["body"], r["ctype"], r["disp"])
             if u.path == "/api/cal":
                 c = load_cal()
                 own = own_load()

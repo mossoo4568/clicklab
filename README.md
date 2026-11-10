@@ -4,11 +4,12 @@ ClickLab is a local-first YouTube research and creator workspace. It combines pu
 
 ## Features
 
-- **Creator tools:** 67 research, video, image, writing, and calculator tools.
+- **Creator tools:** 70 research, video, audio, image, writing, and calculator tools.
 - **Channel workspaces:** organize your channels and add up to 10 competitors per channel.
 - **Public statistics:** track observed channel counters and their actual collection timestamps.
 - **Video Intelligence Pack:** inspect complete public descriptions, creator-applied tags, subtitles, and screen OCR from one video link.
 - **Thumbnail workflows:** measure local images, compare packaging, prepare A/B variants, and optionally generate images.
+- **Local media editing:** clean owned or licensed audio (noise reduction, EQ, loudness, fades, peak/RMS/clipping measurement) and edit local video (trim, speed, colour, loudness, fades, reframing, SRT captions). All processing stays on your computer.
 - **Grounded drafting:** attach real YouTube evidence to supported AI drafting tools.
 - **Responsive interface:** adapts to mobile, laptop, desktop, and wide-screen layouts.
 
@@ -17,7 +18,7 @@ ClickLab is a local-first YouTube research and creator workspace. It combines pu
 - **Windows 10 or 11** for the included batch installers.
 - **Python 3.x**; `setup.bat` can install Python 3.12 through `winget` when available.
 - Python packages listed in [requirements.txt](requirements.txt): Pillow, NumPy, yt-dlp, OpenCV, RapidOCR, scikit-learn, and pytrends.
-- **FFmpeg** available on `PATH` for video-frame screen OCR.
+- **FFmpeg** (with `ffprobe`) available on `PATH` for video-frame screen OCR and local audio/video editing.
 - A **YouTube Data API v3 key** for tools that use the YouTube Data API. Public-page extraction does not cover every API-backed feature.
 - Optional provider keys for specific features:
   - **Gemini:** AI drafting and explicitly selected API screen OCR.
@@ -53,7 +54,7 @@ python -m pip install -r requirements.txt
 python clicklab.py
 ```
 
-Install FFmpeg separately before using screen OCR. Local OCR does not send video frames to a cloud OCR provider.
+Install FFmpeg separately before using screen OCR or the local media editors. Local OCR does not send video frames to a cloud OCR provider, and media editing never uploads your files.
 
 ## Project Files
 
@@ -66,7 +67,7 @@ Install FFmpeg separately before using screen OCR. Local OCR does not send video
 | `studio.css` | Responsive workspace styling |
 | `studio.js`, `studio_pro.js`, `studio_features.js` | Workspace and creator-tool frontend |
 | `studio_backend.py`, `studio_features.py` | Public-data services and tool workflows |
-| `test_studio.py`, `test_studio_features.py` | Regression and browser-layout tests |
+| `test_studio.py`, `test_studio_features.py`, `test_media_edit.py` | Regression, browser-layout, and local media-edit tests |
 | `STUDIO_GUIDE.md` | Workspace behavior and data-source details |
 | `FEATURE_COVERAGE.md` | Implemented tool scope and remaining limitations |
 
@@ -85,14 +86,15 @@ Local runtime data is stored primarily in `thumb_output/`. Back up that folder s
 - Subtitles depend on availability. Screen OCR reads visible frame text; it is not spoken-audio transcription.
 - AI features may consume provider quota or credits. API screen OCR requires explicit selection and confirmation.
 - Earnings, RPM, valuation, and sponsorship calculations are scenarios based on supplied assumptions, not verified channel income.
+- Local media editors require you to confirm ownership or a licence. They apply ordinary quality edits only; no edit removes copyright, bypasses Content ID, or suppresses owner notifications.
 
 ## Tests
 
 ```bash
-python -m unittest test_studio test_studio_features
+python -m unittest test_studio test_studio_features test_media_edit
 ```
 
-The current suite contains 45 tests. Responsive browser tests require Python Playwright and an installed Chrome browser; they are skipped when Playwright is unavailable.
+The current suite contains 55 tests. Responsive browser tests require Python Playwright and an installed Chrome browser; they are skipped when Playwright is unavailable. Media-edit round-trip tests are skipped when FFmpeg or NumPy is unavailable.
 
 For optional public-data tool verification:
 

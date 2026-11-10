@@ -153,7 +153,7 @@ vm.runInContext(`
  assert.throws(()=>efSourceRequireTiming(null,'Untimed text'),/timestamps/);
  for(const t of STUDIO_TOOLS){mount(t.id,'original input');assert.ok($('#esc-panel'),t.id);assert.equal(svalue('q'),'original input');if(t.mode!=='ai'&&t.id!=='title-score')assert.equal(nodesForActions().length,0)}
  function nodesForActions(){return $('#esc-panel').querySelectorAll('[data-source-insert]')}
- assert.equal(STUDIO_TOOLS.length,67);
+ assert.equal(STUDIO_TOOLS.length,70);
  window.CL_ACTIVE_CHANNEL='own-a';mount('summary');EFS.context={...efSourceEmpty(),text:'<img src=x onerror=alert(1)>',source:'User text'};efSourceSave();efSourceRender();
  assert.ok($('#esc-preview').textContent.includes('<img'));assert.equal($('#esc-preview').innerHTML,'');
  window.CL_ACTIVE_CHANNEL='own-b';efSourceCurrent();assert.equal(EFS.context.text,'');EFS.context.text='B';efSourceSave();
@@ -198,7 +198,7 @@ vm.runInContext(`
   await (path==='source'?efSourceFetch('ocr'):path==='pack'?efPackOcr():efTranscriptOcr());assert.equal(requests.length,0,path);assert.equal(ST.busy,false);assert.equal(EFS.pending,null);
  }
  window.confirm=()=>true;mount('transcript',url);input('ef-ocr-engine','api');gateway=()=>({error:'Gemini unavailable; no local fallback'});await efTranscriptOcr();assert.equal(ST.busy,false);assert.ok($('#tool-result').textContent.includes('no local fallback'));
- console.log('Shared context: 67 panels, 14 AI paths, exact metadata, local/API routing in three OCR paths, consent, isolation, timing, stale/duplicate/error checks passed.');
+ console.log('Shared context: 70 panels, 14 AI paths, exact metadata, local/API routing in three OCR paths, consent, isolation, timing, stale/duplicate/error checks passed.');
 })()
 `,sandbox).catch(e=>{console.error(e);process.exitCode=1});
 '''
