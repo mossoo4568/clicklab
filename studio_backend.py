@@ -351,10 +351,6 @@ NOTEBOOK_NICHES = {
     'crime': ['Unsolved cases', 'Organized crime', 'Fraud and scams', 'Missing persons', 'Courtroom cases'],
     'technology': ['Product failures', 'Tech company downfall', 'Cybercrime', 'AI controversies', 'Engineering disasters'],
 }
-NOTEBOOK_GENERIC_NICHES = [
-    'Explainers', 'Case studies', 'History and origins', 'Failures and scandals',
-    'Mysteries and investigations', 'People and biographies', 'Science and technology',
-]
 
 
 def notebook_niches(topic):
@@ -364,11 +360,9 @@ def notebook_niches(topic):
         raise ValueError('Enter a topic before exploring sub-niches.')
     low = topic.lower()
     options = []
-    for key, values in NOTEBOOK_NICHES.items():
-        if key in low or low in key:
-            options.extend(values)
-    if not options:
-        options = NOTEBOOK_GENERIC_NICHES[:]
+    # Notebook is intentionally documentary-focused; do not mix in the wider
+    # Topic Funnel catalog here, because its source workflow is documentary research.
+    options = NOTEBOOK_NICHES['documentary'][:]
     return {'notebook_niches': True, 'topic': topic,
             'options': list(dict.fromkeys(options)),
             'source': 'ClickLab Topic Funnel catalog',
