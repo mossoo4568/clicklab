@@ -100,6 +100,12 @@ echo ============================================
 echo Setup complete.
 echo Ab ClickLab.bat double-click karo.
 echo Virtual environment: .venv
+echo.
+echo Optional Modal cloud worker setup:
+echo   ".venv\Scripts\modal.exe" token new
+echo   ".venv\Scripts\modal.exe" profile current
+echo   ".venv\Scripts\modal.exe" deploy modal_worker.py
+echo Browser login ke baad deploy command isi ClickLab folder mein chalana hai.
 echo API keys repo/setup mein nahi hain; apni keys local/tool ke andar do.
 echo ============================================
 pause
