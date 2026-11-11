@@ -148,3 +148,4 @@ layout{flex-direction:row;align-items:flex-start}.app{width:0;max-width:100%;min
 .media-download-button{white-space:nowrap}
 .media-action-group{display:inline-flex;gap:6px;flex-wrap:wrap}
 .media-auto-edit-button{color:var(--accent)}
+.notebook-export-label{align-self:center;color:var(--tx2);font-size:11px;font-weight:700;margin-left:4px}

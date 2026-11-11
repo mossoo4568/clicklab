@@ -133,14 +133,20 @@ def videos(ids):
             sn, st = v.get('snippet', {}), v.get('statistics', {})
             age = max(1/24, (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(sn['publishedAt'].replace('Z', '+00:00'))).total_seconds()/86400)
             views = int(st['viewCount']) if 'viewCount' in st else None
+            thumbs = sn.get('thumbnails', {}) or {}
+            # Prefer YouTube's native 16:9 master. The old `high` fallback is
+            # often only 480x360 and can contain letterbox bars.
+            thumbnail = ((thumbs.get('maxres') or {}).get('url') or
+                         (thumbs.get('standard') or {}).get('url') or
+                         (thumbs.get('high') or {}).get('url') or '')
             out.append({'id': v['id'], 'title': sn.get('title'), 'channel': sn.get('channelTitle'),
                         'channel_id': sn.get('channelId'), 'published': sn.get('publishedAt'),
                         'views': views, 'likes': int(st['likeCount']) if 'likeCount' in st else None,
                         'comments': int(st['commentCount']) if 'commentCount' in st else None,
                         'seconds': HOST._iso_dur(v.get('contentDetails', {}).get('duration', '')),
                         'description': sn.get('description', ''), 'tags': sn.get('tags', []),
-                        'thumbnail': (sn.get('thumbnails', {}).get('high') or {}).get('url', ''),
-                        'thumbnails': sn.get('thumbnails', {}),
+                        'thumbnail': thumbnail,
+                        'thumbnails': thumbs,
                         'views_per_day': round(views/age, 2) if views is not None else None,
                         'made_for_kids':v.get('status',{}).get('madeForKids'),'paid_placement':v.get('paidProductPlacementDetails',{}).get('hasPaidProductPlacement'),'category_id':sn.get('categoryId'), 'age_days': round(age, 2), 'language': sn.get('defaultAudioLanguage', '')})
     # A playlist may contain the same video more than once. Preserve occurrences.
