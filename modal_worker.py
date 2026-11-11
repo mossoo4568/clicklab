@@ -29,7 +29,17 @@ image = (
 )
 
 
-def _params() -> dict:
+def _params(preset: str) -> dict:
+    if preset == "better":
+        return {
+            "speed": 1.015,
+            "pitch_factor": 0.988,
+            "zoom_factor": 0.96,
+            "angle": 0.0,
+            "lowpass_freq": 13500,
+            "highpass_freq": 25,
+            "gop_size": 60,
+        }
     return {
         "speed": round(random.uniform(1.012, 1.025), 6),
         "pitch_factor": round(random.uniform(0.982, 0.992), 6),
@@ -58,19 +68,25 @@ def process_media(input_b64: str, filename: str, quality: str = "720", preset: s
     """
     if quality not in {"480", "720", "1080"}:
         raise ValueError("quality must be 480, 720 or 1080")
+    if preset not in {"better", "better2"}:
+        raise ValueError("preset must be better or better2")
     raw = base64.b64decode(input_b64)
     if not raw or len(raw) > 1024 * 1024 * 1024:
         raise ValueError("input is empty or larger than 1 GB")
     ext = Path(filename or "input.mp4").suffix.lower()
     is_audio = ext in {".mp3", ".wav"}
-    p = _params()
+    p = _params(preset)
     with tempfile.TemporaryDirectory(prefix="clicklab-modal-") as td:
         src = Path(td) / ("input" + (ext if ext else ".mp4")); out = Path(td) / ("output.mp3" if is_audio else "output.mp4")
         src.write_bytes(raw)
-        af = (f"asetrate=44100*{p['pitch_factor']},aresample=44100,atempo={p['speed']},"
-              "allpass=f=1000:width_type=h:w=200,flanger=delay=2:depth=1:regen=0:width=10:speed=0.2,"
-              f"highpass=f={p['highpass_freq']},lowpass=f={p['lowpass_freq']},"
-              "extrastereo=m=1.18,acompressor=threshold=-20dB:ratio=1.5:attack=50:release=500")
+        if preset == "better":
+            af = ("asetrate=44100*0.988,aresample=44100,atempo=1.015,atempo=1.01214575,"
+                  "highpass=f=25,lowpass=f=13500,extrastereo=m=1.15,volume=1.02")
+        else:
+            af = (f"asetrate=44100*{p['pitch_factor']},aresample=44100,atempo={p['speed']},"
+                  "allpass=f=1000:width_type=h:w=200,flanger=delay=2:depth=1:regen=0:width=10:speed=0.2,"
+                  f"highpass=f={p['highpass_freq']},lowpass=f={p['lowpass_freq']},"
+                  "extrastereo=m=1.18,acompressor=threshold=-20dB:ratio=1.5:attack=50:release=500")
         if is_audio:
             fc = f"[0:a:0][1:a:0]amix=inputs=2:duration=first[mixed];[mixed]{af}[final]"
             cmd = ["ffmpeg", "-y", "-i", str(src), "-f", "lavfi", "-i", "anoisesrc=c=brown:a=0.004",
@@ -79,10 +95,14 @@ def process_media(input_b64: str, filename: str, quality: str = "720", preset: s
             _run(cmd)
         else:
             height = int(quality); width = round(height * 16 / 9 / 2) * 2
-            vf = ("hflip,rotate=%s:bilinear=1,crop=iw*%s:ih*%s,scale=%s:%s,"
-                  "eq=brightness=0.015:contrast=1.02:saturation=0.96,hue=h=2,"
-                  "noise=alls=3:allf=t+u,vignette=PI/6,setpts=PTS/%s") % (
-                      p["angle"], p["zoom_factor"], p["zoom_factor"], width, height, p["speed"])
+            if preset == "better":
+                vf = ("crop=iw*0.96:ih*0.96,scale=%s:%s,eq=brightness=0.02:contrast=1.03:saturation=0.95,"
+                      "noise=alls=3:allf=t+u,vignette=PI/6,setpts=PTS/1.015,fps=29.97") % (width, height)
+            else:
+                vf = ("hflip,rotate=%s:bilinear=1,crop=iw*%s:ih*%s,scale=%s:%s,"
+                      "eq=brightness=0.015:contrast=1.02:saturation=0.96,hue=h=2,"
+                      "noise=alls=3:allf=t+u,vignette=PI/6,setpts=PTS/%s,fps=29.97") % (
+                          p["angle"], p["zoom_factor"], p["zoom_factor"], width, height, p["speed"])
             fc = (f"[0:v:0]{vf}[v];anoisesrc=c=brown:a=0.004[noise];"
                   f"[0:a:0][noise]amix=inputs=2:duration=first[mixed];[mixed]{af}[a]")
             common = ["-y", "-i", str(src), "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
@@ -102,7 +122,8 @@ def process_media(input_b64: str, filename: str, quality: str = "720", preset: s
                 x264[insert:insert] = ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
                 _run(x264)
                 encoder = "libx264-fallback"
-        return {"filename": Path(filename).stem + "-modal-better2.0" + out.suffix,
+        tag = "better2.0" if preset == "better2" else "better"
+        return {"filename": Path(filename).stem + "-modal-" + tag + out.suffix,
                 "quality": quality, "encoder": "libmp3lame" if is_audio else encoder,
                 "bytes": out.stat().st_size, "parameters": p,
                 "data_b64": base64.b64encode(out.read_bytes()).decode("ascii")}

@@ -9405,7 +9405,8 @@ def _modal_edit_worker(jid, raw, name, quality, preset):
             MEDIA_IMPORTS[token] = {"path": str(path), "name": result.get("filename") or "better2.0.mp4",
                                     "ts": time.time(), "bytes": len(out)}
         result.update({"output_token": token, "name": result.get("filename") or "better2.0.mp4", "bytes": len(out),
-                       "preset": "Better 2.0", "note": "Modal remote export completed. Original media was not modified."})
+                       "preset": "Better 2.0" if preset == "better2" else "Better Polish",
+                       "note": "Modal remote export completed. Original media was not modified."})
         JOBS[jid].update({"state": "done", "done": 100, "current": "Modal export complete", "result": result})
     except Exception as e:
         if JOBS.get(jid, {}).get("state") != "cancelled":
@@ -9421,7 +9422,8 @@ def start_modal_edit(data):
     quality = str(data.get("quality") or "720")
     if quality not in ("480", "720", "1080"): quality = "720"
     preset = str(data.get("preset") or "better2")
-    if preset != "better2": return {"error": "Modal remote mode currently supports Better 2.0 only."}
+    if preset not in ("better", "better2"):
+        return {"error": "Unsupported Modal editing preset."}
     jid = uuid.uuid4().hex
     JOBS[jid] = {"state": "starting", "done": 8, "total": 100, "current": "Starting Modal worker…", "kind": "modal-edit"}
     threading.Thread(target=_modal_edit_worker, args=(jid, raw, name, quality, preset), daemon=True).start()
@@ -9444,6 +9446,23 @@ def cancel_modal_edit(jid):
         pass
     job.update({"state": "cancelled", "current": "Modal job stopped", "done": job.get("done", 0)})
     return {"ok": True, "state": "cancelled"}
+
+
+def modal_status():
+    """Return the one Modal profile used by this ClickLab process."""
+    candidates = [shutil.which("modal"), str(HERE / ".venv" / "Scripts" / "modal.exe")]
+    exe = next((x for x in candidates if x and Path(x).exists()), None)
+    if not exe:
+        return {"connected": False, "profile": None, "message": "Modal is not installed. Run setup.bat."}
+    try:
+        p = subprocess.run([exe, "profile", "current"], capture_output=True, text=True, timeout=15)
+        profile = (p.stdout or "").strip().splitlines()[-1] if p.returncode == 0 and (p.stdout or "").strip() else None
+        if not profile:
+            return {"connected": False, "profile": None, "message": "Modal login required: run .venv\\Scripts\\modal.exe token new."}
+        return {"connected": True, "profile": profile, "workspace": profile,
+                "message": "One active Modal profile for this ClickLab process."}
+    except Exception as e:
+        return {"connected": False, "profile": None, "message": str(e)[:180]}
 
 def better_quality_download(token, quality):
     """Return the completed Better export at a selectable delivery quality."""
@@ -9817,6 +9836,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, start_modal_edit(d))
             if u.path == "/api/modal-cancel":
                 return self._send(200, cancel_modal_edit(str(d.get("job") or "")))
+            if u.path == "/api/modal-status":
+                return self._send(200, modal_status())
             if u.path == "/api/audio-edit":
                 return self._send(200, local_audio_edit(d))
             if u.path == "/api/media-analyze":

@@ -206,7 +206,7 @@ async function runBetterSmartEdit(){
  else BETTER_MEDIA.original=URL.createObjectURL(file);
  const preset=$('#sf-preset')?.value||'better2';
  const base=imported?.token?{rights:true,import_token:imported.token,quality,preset,mirror:!!$('#sf-mirror')?.checked,transcribe:!!$('#sf-transcribe')?.checked,silence:!!$('#sf-silence')?.checked}:{rights:true,b64:await readDataURL(file),name:file.name,quality,preset,mirror:!!$('#sf-mirror')?.checked,transcribe:!!$('#sf-transcribe')?.checked,silence:!!$('#sf-silence')?.checked};
- if($('#sf-execution')?.value==='modal'){if(preset!=='better2')throw Error('Modal cloud mode is available for Better 2.0 only.');return await runModalBetterEdit(base)}
+ if($('#sf-execution')?.value==='modal')return await runModalBetterEdit(base)
  betterProgress(2);
  const analysis=await jp('/api/media-analyze',base); if(analysis.error)throw Error(analysis.error);
  betterProgress(3);
@@ -299,3 +299,5 @@ async function runModalBetterEdit(base){
  const stop=document.createElement('button');stop.type='button';stop.className='sm gh';stop.textContent='Stop Modal job';stop.onclick=()=>{jp('/api/modal-cancel',{job}).catch(()=>{});stop.disabled=true;stop.textContent='Stopping…'};$('#tool-run')?.parentElement.appendChild(stop);
  for(;;){await new Promise(r=>setTimeout(r,1200));const p=await jp('/api/modal-progress?id='+encodeURIComponent(job));if(p.state==='error')throw Error(p.error||'Modal worker failed.');if(p.state==='cancelled')throw Error('Modal job stopped.');if(p.state==='done'){stop.remove();const r=p.result;if(r.output_token){const op=await fetch('/api/media-preview?token='+encodeURIComponent(r.output_token));if(!op.ok)throw Error('Modal export preview expired.');BETTER_MEDIA.output=URL.createObjectURL(await op.blob())}betterProgress(4);setTimeout(()=>decorateBetterDownload(r),0);return r}betterProgress(p.done>=45?3:1)}
 }
+async function showModalAccount(){const e=$('#sf-execution');if(!e||$('#sf-modal-status'))return;const p=document.createElement('p');p.id='sf-modal-status';p.className='studio-muted';p.textContent='Checking Modal account…';e.parentElement.appendChild(p);try{const r=await jp('/api/modal-status');p.textContent=r.connected?'Modal connected: '+r.profile+' · one active profile':'Modal not connected: '+(r.message||'login required')}catch(x){p.textContent='Modal status unavailable'}}
+new MutationObserver(showModalAccount).observe(document.body,{childList:true,subtree:true});
