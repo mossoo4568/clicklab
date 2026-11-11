@@ -339,8 +339,44 @@ def search(query, region='US', language='en', order='relevance', days=0, before_
     return videos([i['id']['videoId'] for i in r.get('items',[]) if 'videoId' in i['id']])
 
 
-def notebook_search(topic, count=20, region='US', language='en'):
-    """Return highest-view public videos from YouTube's topic search."""
+NOTEBOOK_NICHES = {
+    'documentary': [
+        'True crime', 'Business downfall', 'Ancient civilizations', 'Lost history',
+        'War and politics', 'Technology disasters', 'Cults and mysteries',
+        'Scams and frauds', 'Billionaire stories', 'Unsolved mysteries',
+        'Natural disasters', 'Dark psychology',
+    ],
+    'history': ['Ancient civilizations', 'Lost history', 'War history', 'Royal scandals', 'Historical mysteries'],
+    'business': ['Company downfall', 'Startup failures', 'Corporate scandals', 'Billionaire stories', 'Business strategy'],
+    'crime': ['Unsolved cases', 'Organized crime', 'Fraud and scams', 'Missing persons', 'Courtroom cases'],
+    'technology': ['Product failures', 'Tech company downfall', 'Cybercrime', 'AI controversies', 'Engineering disasters'],
+}
+NOTEBOOK_GENERIC_NICHES = [
+    'Explainers', 'Case studies', 'History and origins', 'Failures and scandals',
+    'Mysteries and investigations', 'People and biographies', 'Science and technology',
+]
+
+
+def notebook_niches(topic):
+    """Return deterministic deep-niche suggestions from the Topic Funnel catalog."""
+    topic = str(topic or '').strip()[:120]
+    if not topic:
+        raise ValueError('Enter a topic before exploring sub-niches.')
+    low = topic.lower()
+    options = []
+    for key, values in NOTEBOOK_NICHES.items():
+        if key in low or low in key:
+            options.extend(values)
+    if not options:
+        options = NOTEBOOK_GENERIC_NICHES[:]
+    return {'notebook_niches': True, 'topic': topic,
+            'options': list(dict.fromkeys(options)),
+            'source': 'ClickLab Topic Funnel catalog',
+            'note': 'Suggestions are a starting filter. Final ranking comes from YouTube public viewCount.'}
+
+
+def notebook_search(topic, count=20, region='US', language='en', niche=''):
+    """Return highest-view public videos from a topic plus optional micro-niche search."""
     topic = str(topic or '').strip()[:120]
     if not topic:
         raise ValueError('Enter a topic for Notebook.')
@@ -350,7 +386,9 @@ def notebook_search(topic, count=20, region='US', language='en'):
         raise ValueError('Video count must be a whole number between 1 and 50.')
     if not 1 <= count <= 50:
         raise ValueError('Video count must be between 1 and 50.')
-    rows = sorted(search(topic, region, language, order='viewCount'),
+    niche = str(niche or '').strip()[:100]
+    search_query = ' '.join(x for x in (topic, niche) if x)
+    rows = sorted(search(search_query, region, language, order='viewCount'),
                   key=lambda row: row.get('views') if row.get('views') is not None else -1,
                   reverse=True)[:count]
     for row in rows:
@@ -358,7 +396,8 @@ def notebook_search(topic, count=20, region='US', language='en'):
         row['video_url'] = 'https://www.youtube.com/watch?v=' + vid
         row['channel_url'] = ('https://www.youtube.com/channel/' + cid) if cid else ''
     urls = [row['video_url'] for row in rows]
-    return {'notebook': True, 'topic': topic, 'requested': count, 'rows': rows,
+    return {'notebook': True, 'topic': topic, 'niche': niche, 'search_query': search_query,
+            'requested': count, 'rows': rows,
             'urls': urls, 'url_text': '\n'.join(urls) + ('\n' if urls else ''),
             'source': 'YouTube Data API · public search ordered by viewCount',
             'note': "Highest-view videos in YouTube's returned public topic search; this is not an exhaustive crawl of every YouTube video."}
@@ -444,8 +483,10 @@ def tool_run(kind, data):
         result.update(rows=rows,keywords=sorted(words.items(),key=lambda p:p[1],reverse=True)[:30],sample_size=len(rows),
                       median_views=statistics.median([v['views'] for v in rows if v['views'] is not None]) if any(v['views'] is not None for v in rows) else None,
                       note='Search sample, not search volume or a complete market index. Keyword counts are occurrences in returned titles.')
+    elif kind=='notebook-niches':
+        return notebook_niches(q)
     elif kind=='notebook':
-        return notebook_search(q, data.get('count') or 20, region, language)
+        return notebook_search(q, data.get('count') or 20, region, language, data.get('niche') or '')
     elif kind=='rank':
         vid=video_id(q)
         keywords=[x.strip() for x in str(data.get('keywords','')).splitlines() if x.strip()][:5]
