@@ -9838,6 +9838,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cancel_modal_edit(str(d.get("job") or "")))
             if u.path == "/api/modal-status":
                 return self._send(200, modal_status())
+            if u.path == "/api/modal-progress":
+                ids = urllib.parse.parse_qs(u.query).get("id") or [d.get("job") or ""]
+                return self._send(200, modal_progress(str(ids[0])))
             if u.path == "/api/audio-edit":
                 return self._send(200, local_audio_edit(d))
             if u.path == "/api/media-analyze":
