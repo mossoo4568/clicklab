@@ -9329,7 +9329,8 @@ def better_video_edit(data):
             af = ["asetrate=44100*%s" % rp["pitch_factor"], "aresample=44100", "atempo=%s" % rp["speed"],
                   "allpass=f=1000:width_type=h:w=200", "flanger=delay=2:depth=1:regen=0:width=10:speed=0.2",
                   "highpass=f=%s" % rp["highpass_freq"], "lowpass=f=%s" % rp["lowpass_freq"],
-                  "extrastereo=m=1.18", "acompressor=threshold=-20dB:ratio=1.5:attack=50:release=500"]
+                  "extrastereo=m=1.18", "acompressor=threshold=-20dB:ratio=1.5:attack=50:release=500",
+                  "volume=1.18", "alimiter=limit=0.95"]
         else:
             af = ["asetpts=PTS-STARTPTS", "asetrate=44100*0.988", "aresample=44100",
                   "atempo=1.015", "atempo=1.01214575",

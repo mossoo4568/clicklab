@@ -86,7 +86,8 @@ def process_media(input_b64: str, filename: str, quality: str = "720", preset: s
             af = (f"asetrate=44100*{p['pitch_factor']},aresample=44100,atempo={p['speed']},"
                   "allpass=f=1000:width_type=h:w=200,flanger=delay=2:depth=1:regen=0:width=10:speed=0.2,"
                   f"highpass=f={p['highpass_freq']},lowpass=f={p['lowpass_freq']},"
-                  "extrastereo=m=1.18,acompressor=threshold=-20dB:ratio=1.5:attack=50:release=500")
+                  "extrastereo=m=1.18,acompressor=threshold=-20dB:ratio=1.5:attack=50:release=500,"
+                  "volume=1.18,alimiter=limit=0.95")
         if is_audio:
             fc = f"[0:a:0][1:a:0]amix=inputs=2:duration=first[mixed];[mixed]{af}[final]"
             cmd = ["ffmpeg", "-y", "-i", str(src), "-f", "lavfi", "-i", "anoisesrc=c=brown:a=0.004",
