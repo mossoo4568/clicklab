@@ -369,8 +369,28 @@ def notebook_niches(topic):
             'note': 'Suggestions are a starting filter. Final ranking comes from YouTube public viewCount.'}
 
 
-def notebook_search(topic, count=20, region='US', language='en', niche=''):
-    """Return highest-view public videos from a topic plus optional micro-niche search."""
+def _notebook_longform_search(query, count, region='US', language='en'):
+    """Fetch enough ordered search pages to return up to count non-Shorts videos."""
+    wanted = max(1, min(int(count), 50))
+    ids, token, pages = [], None, 0
+    while len(ids) < wanted * 3 and pages < 4:
+        params = {'part': 'snippet', 'q': query, 'type': 'video', 'maxResults': 50,
+                  'order': 'viewCount', 'regionCode': region, 'relevanceLanguage': language}
+        if token:
+            params['pageToken'] = token
+        page = api('search', **params)
+        ids.extend(i['id']['videoId'] for i in page.get('items', []) if 'videoId' in i.get('id', {}))
+        token = page.get('nextPageToken')
+        pages += 1
+        if not token:
+            break
+    rows = videos(list(dict.fromkeys(ids)))
+    return sorted((v for v in rows if (v.get('seconds') or 0) > 180 and '#shorts' not in (v.get('title') or '').lower()),
+                  key=lambda row: row.get('views') if row.get('views') is not None else -1, reverse=True)[:wanted]
+
+
+def notebook_search(topic, count=50, region='US', language='en', niche='', style='', keyword=''):
+    """Return highest-view long-form public videos for a four-step funnel selection."""
     topic = str(topic or '').strip()[:120]
     if not topic:
         raise ValueError('Enter a topic for Notebook.')
@@ -381,20 +401,21 @@ def notebook_search(topic, count=20, region='US', language='en', niche=''):
     if not 1 <= count <= 50:
         raise ValueError('Video count must be between 1 and 50.')
     niche = str(niche or '').strip()[:100]
-    search_query = ' '.join(x for x in (topic, niche) if x)
-    rows = sorted(search(search_query, region, language, order='viewCount'),
-                  key=lambda row: row.get('views') if row.get('views') is not None else -1,
-                  reverse=True)[:count]
+    style = str(style or '').strip()[:100]
+    keyword = str(keyword or '').strip()[:100]
+    search_query = ' '.join(x for x in (topic, niche, style, keyword) if x)
+    rows = _notebook_longform_search(search_query, count, region, language)
     for row in rows:
         vid, cid = row.get('id') or '', row.get('channel_id') or ''
         row['video_url'] = 'https://www.youtube.com/watch?v=' + vid
         row['channel_url'] = ('https://www.youtube.com/channel/' + cid) if cid else ''
     urls = [row['video_url'] for row in rows]
-    return {'notebook': True, 'topic': topic, 'niche': niche, 'search_query': search_query,
+    return {'notebook': True, 'topic': topic, 'niche': niche, 'style': style, 'keyword': keyword,
+            'search_query': search_query,
             'requested': count, 'rows': rows,
             'urls': urls, 'url_text': '\n'.join(urls) + ('\n' if urls else ''),
             'source': 'YouTube Data API · public search ordered by viewCount',
-            'note': "Highest-view videos in YouTube's returned public topic search; this is not an exhaustive crawl of every YouTube video."}
+            'note': "Highest-view long-form videos in YouTube's returned public topic search. Shorts (<=180 seconds or tagged #shorts) are excluded; fewer than 50 means YouTube returned fewer matching long-form videos."}
 
 
 def tool_run(kind, data):
@@ -480,7 +501,8 @@ def tool_run(kind, data):
     elif kind=='notebook-niches':
         return notebook_niches(q)
     elif kind=='notebook':
-        return notebook_search(q, data.get('count') or 20, region, language, data.get('niche') or '')
+        return notebook_search(q, data.get('count') or 50, region, language,
+                               data.get('niche') or '', data.get('style') or '', data.get('keyword') or '')
     elif kind=='rank':
         vid=video_id(q)
         keywords=[x.strip() for x in str(data.get('keywords','')).splitlines() if x.strip()][:5]
