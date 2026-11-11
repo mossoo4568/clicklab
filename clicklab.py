@@ -9791,6 +9791,32 @@ def live_channel(query):
             "source": "YouTube Data API", "cached": False}
 
 
+def notebook_thumbnail_zip(rows):
+    """Download the returned public thumbnail URLs into a title-named ZIP."""
+    import zipfile
+    buf = io.BytesIO()
+    used = set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, row in enumerate(rows[:50], 1):
+            url = str((row or {}).get("thumbnail") or "")
+            host = urllib.parse.urlparse(url).hostname or ""
+            if host not in ("i.ytimg.com", "img.youtube.com", "yt3.ggpht.com"):
+                continue
+            try:
+                raw = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=20).read()
+            except Exception:
+                continue
+            title = re.sub(r"[^\w\-. ]+", "", str((row or {}).get("title") or "thumbnail"), flags=re.UNICODE).strip()
+            title = re.sub(r"\s+", " ", title)[:100] or "thumbnail"
+            name = f"{i:02d} - {title}.jpg"
+            base, n = name, 2
+            while name.lower() in used:
+                name = f"{base[:-4]} ({n}).jpg"; n += 1
+            used.add(name.lower())
+            zf.writestr(name, raw)
+    return buf.getvalue()
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -9842,6 +9868,9 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/modal-progress":
                 ids = urllib.parse.parse_qs(u.query).get("id") or [d.get("job") or ""]
                 return self._send(200, modal_progress(str(ids[0])))
+            if u.path == "/api/notebook-thumbnails":
+                return self._send(200, notebook_thumbnail_zip(d.get("rows") or []), "application/zip",
+                                  'attachment; filename="notebook-thumbnails.zip"')
             if u.path == "/api/audio-edit":
                 return self._send(200, local_audio_edit(d))
             if u.path == "/api/media-analyze":
