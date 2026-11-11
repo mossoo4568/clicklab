@@ -360,8 +360,6 @@ def notebook_niches(topic):
         raise ValueError('Enter a topic before exploring sub-niches.')
     low = topic.lower()
     options = []
-    # Notebook is intentionally documentary-focused; do not mix in the wider
-    # Topic Funnel catalog here, because its source workflow is documentary research.
     options = NOTEBOOK_NICHES['documentary'][:]
     return {'notebook_niches': True, 'topic': topic,
             'options': list(dict.fromkeys(options)),
@@ -389,7 +387,7 @@ def _notebook_longform_search(query, count, region='US', language='en'):
                   key=lambda row: row.get('views') if row.get('views') is not None else -1, reverse=True)[:wanted]
 
 
-def notebook_search(topic, count=50, region='US', language='en', niche='', style='', keyword=''):
+def notebook_search(topic, count=50, region='US', language='en', niche='', style='', keyword='', focus=''):
     """Return highest-view long-form public videos for a four-step funnel selection."""
     topic = str(topic or '').strip()[:120]
     if not topic:
@@ -403,14 +401,15 @@ def notebook_search(topic, count=50, region='US', language='en', niche='', style
     niche = str(niche or '').strip()[:100]
     style = str(style or '').strip()[:100]
     keyword = str(keyword or '').strip()[:100]
-    search_query = ' '.join(x for x in (topic, niche, style, keyword) if x)
+    focus = str(focus or '').strip()[:140]
+    search_query = ' '.join(x for x in (topic, niche, style, keyword, focus) if x)
     rows = _notebook_longform_search(search_query, count, region, language)
     for row in rows:
         vid, cid = row.get('id') or '', row.get('channel_id') or ''
         row['video_url'] = 'https://www.youtube.com/watch?v=' + vid
         row['channel_url'] = ('https://www.youtube.com/channel/' + cid) if cid else ''
     urls = [row['video_url'] for row in rows]
-    return {'notebook': True, 'topic': topic, 'niche': niche, 'style': style, 'keyword': keyword,
+    return {'notebook': True, 'topic': topic, 'niche': niche, 'style': style, 'keyword': keyword, 'focus': focus,
             'search_query': search_query,
             'requested': count, 'rows': rows,
             'urls': urls, 'url_text': '\n'.join(urls) + ('\n' if urls else ''),
@@ -502,7 +501,7 @@ def tool_run(kind, data):
         return notebook_niches(q)
     elif kind=='notebook':
         return notebook_search(q, data.get('count') or 50, region, language,
-                               data.get('niche') or '', data.get('style') or '', data.get('keyword') or '')
+                               data.get('niche') or '', data.get('style') or '', data.get('keyword') or '', data.get('focus') or '')
     elif kind=='rank':
         vid=video_id(q)
         keywords=[x.strip() for x in str(data.get('keywords','')).splitlines() if x.strip()][:5]
