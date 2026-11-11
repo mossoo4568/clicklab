@@ -18,3 +18,6 @@ pytrends
 # na lage to tool saaf "transcript unavailable" likhta hai aur silence/audio analysis
 # chalta rehta hai. Pehli dafa model weights Hugging Face se free download hote hain.
 faster-whisper
+# Optional remote worker control for Better 2.0 on Modal. Local editing still
+# works when Modal is not configured.
+modal

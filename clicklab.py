@@ -9385,6 +9385,66 @@ def better_video_edit(data):
                 "random_parameters": rp,
                 "note": "Local export completed. Original media was not modified."}
 
+
+def _modal_edit_worker(jid, raw, name, quality, preset):
+    """Submit Better 2.0 to the deployed Modal worker and retain a local result token."""
+    try:
+        import modal
+        fn = modal.Function.from_name("clicklab-media-worker", "process_media")
+        call = fn.spawn(base64.b64encode(raw).decode("ascii"), name, quality, preset)
+        JOBS[jid].update({"modal_call": call, "current": "Modal T4 worker processing…", "done": 45, "total": 100})
+        result = call.get()
+        if not isinstance(result, dict) or not result.get("data_b64"):
+            raise RuntimeError("Modal worker returned no media output.")
+        out = base64.b64decode(result.pop("data_b64"))
+        export_dir = OUT / "better_exports"; export_dir.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        path = export_dir / (token + Path(result.get("filename") or "output.mp4").suffix)
+        path.write_bytes(out)
+        with _IMPORT_LOCK:
+            MEDIA_IMPORTS[token] = {"path": str(path), "name": result.get("filename") or "better2.0.mp4",
+                                    "ts": time.time(), "bytes": len(out)}
+        result.update({"output_token": token, "name": result.get("filename") or "better2.0.mp4", "bytes": len(out),
+                       "preset": "Better 2.0", "note": "Modal remote export completed. Original media was not modified."})
+        JOBS[jid].update({"state": "done", "done": 100, "current": "Modal export complete", "result": result})
+    except Exception as e:
+        if JOBS.get(jid, {}).get("state") != "cancelled":
+            JOBS[jid].update({"state": "error", "current": "Modal export failed", "error": str(e)[:500]})
+
+
+def start_modal_edit(data):
+    if not data.get("rights"):
+        return {"error": "Confirm that you own this video or have a licence to edit it."}
+    raw, name, err = _media_source(data)
+    if err: return {"error": err}
+    if not raw or len(raw) > 1024 * 1024 * 1024: return {"error": "Video is empty or larger than 1 GB."}
+    quality = str(data.get("quality") or "720")
+    if quality not in ("480", "720", "1080"): quality = "720"
+    preset = str(data.get("preset") or "better2")
+    if preset != "better2": return {"error": "Modal remote mode currently supports Better 2.0 only."}
+    jid = uuid.uuid4().hex
+    JOBS[jid] = {"state": "starting", "done": 8, "total": 100, "current": "Starting Modal worker…", "kind": "modal-edit"}
+    threading.Thread(target=_modal_edit_worker, args=(jid, raw, name, quality, preset), daemon=True).start()
+    return {"job": jid, "state": "starting", "current": "Starting Modal worker…"}
+
+
+def modal_progress(jid):
+    job = JOBS.get(jid)
+    if not job: return {"state": "gone"}
+    return {k: v for k, v in job.items() if k != "modal_call"}
+
+
+def cancel_modal_edit(jid):
+    job = JOBS.get(jid)
+    if not job: return {"error": "Modal job not found."}
+    call = job.get("modal_call")
+    try:
+        if call: call.cancel(terminate_containers=True)
+    except Exception:
+        pass
+    job.update({"state": "cancelled", "current": "Modal job stopped", "done": job.get("done", 0)})
+    return {"ok": True, "state": "cancelled"}
+
 def better_quality_download(token, quality):
     """Return the completed Better export at a selectable delivery quality."""
     quality = str(quality or "1080")
@@ -9753,6 +9813,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, local_video_edit(d))
             if u.path == "/api/better-edit":
                 return self._send(200, better_video_edit(d))
+            if u.path == "/api/modal-edit":
+                return self._send(200, start_modal_edit(d))
+            if u.path == "/api/modal-cancel":
+                return self._send(200, cancel_modal_edit(str(d.get("job") or "")))
             if u.path == "/api/audio-edit":
                 return self._send(200, local_audio_edit(d))
             if u.path == "/api/media-analyze":
@@ -10043,6 +10107,8 @@ class H(BaseHTTPRequestHandler):
                 if not j:
                     return self._send(404, {"state": "gone"})
                 return self._send(200, j)
+            if u.path == "/api/modal-progress":
+                return self._send(200, modal_progress(q.get("id") or ""))
             if u.path == "/api/data":
                 d = load_scan(q.get("id") or "")
                 # purane scan ka cached cst purane niche formula ka hai — ek baar
