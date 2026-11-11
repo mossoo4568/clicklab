@@ -339,6 +339,31 @@ def search(query, region='US', language='en', order='relevance', days=0, before_
     return videos([i['id']['videoId'] for i in r.get('items',[]) if 'videoId' in i['id']])
 
 
+def notebook_search(topic, count=20, region='US', language='en'):
+    """Return highest-view public videos from YouTube's topic search."""
+    topic = str(topic or '').strip()[:120]
+    if not topic:
+        raise ValueError('Enter a topic for Notebook.')
+    try:
+        count = int(count or 20)
+    except (TypeError, ValueError):
+        raise ValueError('Video count must be a whole number between 1 and 50.')
+    if not 1 <= count <= 50:
+        raise ValueError('Video count must be between 1 and 50.')
+    rows = sorted(search(topic, region, language, order='viewCount'),
+                  key=lambda row: row.get('views') if row.get('views') is not None else -1,
+                  reverse=True)[:count]
+    for row in rows:
+        vid, cid = row.get('id') or '', row.get('channel_id') or ''
+        row['video_url'] = 'https://www.youtube.com/watch?v=' + vid
+        row['channel_url'] = ('https://www.youtube.com/channel/' + cid) if cid else ''
+    urls = [row['video_url'] for row in rows]
+    return {'notebook': True, 'topic': topic, 'requested': count, 'rows': rows,
+            'urls': urls, 'url_text': '\n'.join(urls) + ('\n' if urls else ''),
+            'source': 'YouTube Data API · public search ordered by viewCount',
+            'note': "Highest-view videos in YouTube's returned public topic search; this is not an exhaustive crawl of every YouTube video."}
+
+
 def tool_run(kind, data):
     if kind == 'source-context':
         return source_context(data)
@@ -419,6 +444,8 @@ def tool_run(kind, data):
         result.update(rows=rows,keywords=sorted(words.items(),key=lambda p:p[1],reverse=True)[:30],sample_size=len(rows),
                       median_views=statistics.median([v['views'] for v in rows if v['views'] is not None]) if any(v['views'] is not None for v in rows) else None,
                       note='Search sample, not search volume or a complete market index. Keyword counts are occurrences in returned titles.')
+    elif kind=='notebook':
+        return notebook_search(q, data.get('count') or 20, region, language)
     elif kind=='rank':
         vid=video_id(q)
         keywords=[x.strip() for x in str(data.get('keywords','')).splitlines() if x.strip()][:5]
