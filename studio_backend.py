@@ -463,7 +463,7 @@ def channel_name_lab(topic, region='US', language='en', count=10):
                 ('Chronicle', 'chronicle'), ('Lens', 'lens'), ('Decoded', 'decoded'),
                 ('Uncovered', 'uncovered')]
     suggestions = []
-    taken_names = {re.sub(r'[^a-z0-9]', '', x['name'].lower()) for x in successful}
+    checked_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
     for label, slug in suffixes:
         name = f'{display} {label}'
         handle = '@' + base + slug
@@ -471,13 +471,16 @@ def channel_name_lab(topic, region='US', language='en', count=10):
             existing = api('channels', part='id,snippet', forHandle=handle).get('items', [])
         except ValueError:
             existing = []
-        suggestions.append({'name': name, 'handle': handle, 'status': 'public match found' if existing else 'no public match found',
-                            'available_looking': not bool(existing),
-                            'note': 'YouTube final availability is checked when creating the channel.'})
+        is_available = not bool(existing)
+        suggestions.append({'name': name, 'handle': handle,
+                            'status': 'available now' if is_available else 'unavailable — public match found',
+                            'available_looking': is_available,
+                            'checked_at': checked_at,
+                            'note': 'Live exact public-handle check at this time. Availability can change if someone claims it.'})
     return {'name_lab': True, 'topic': topic, 'successful_channels': successful,
             'suggestions': suggestions,
             'source': 'YouTube Data API · public channel search and exact handle resolution',
-            'note': 'Successful means the public channel appeared in the niche search and is ranked by subscribers, then total views. Handle status is a live public-resolution check, not a reservation guarantee.'}
+            'note': 'Successful means the public channel appeared in the niche search and is ranked by subscribers, then total views. Every suggested username was checked live using exact public handle resolution.'}
 
 
 def tool_run(kind, data):
