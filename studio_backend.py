@@ -454,33 +454,47 @@ def channel_name_lab(topic, region='US', language='en', count=10):
     successful.sort(key=lambda x: (x.get('subscribers') or 0, x.get('views') or 0), reverse=True)
     successful = successful[:count]
 
-    words = [re.sub(r'[^a-z0-9]', '', x.lower()) for x in re.findall(r'[A-Za-z0-9]+', topic)]
-    words = [x for x in words if len(x) >= 3]
-    base = ''.join(words[:2]) or 'story'
-    display = ' '.join(x.capitalize() for x in words[:2]) or 'Story'
-    suffixes = [('Atlas', 'atlas'), ('Archive', 'archive'), ('Brief', 'brief'),
-                ('Files', 'files'), ('Signal', 'signal'), ('Vault', 'vault'),
-                ('Chronicle', 'chronicle'), ('Lens', 'lens'), ('Decoded', 'decoded'),
-                ('Uncovered', 'uncovered')]
+    lower_topic = topic.lower()
+    if any(x in lower_topic for x in ('crime', 'murder', 'criminal', 'missing', 'case', 'scandal')):
+        style, prefixes = 'investigative / dark crime', ['Midnight', 'Cold Case', 'Shadow', 'Evidence', 'Case', 'Darkroom', 'Unsolved', 'Red Thread', 'Docket', 'Forensic']
+        suffixes = ['Ledger', 'Files', 'Signal', 'Archive', 'Brief']
+    elif any(x in lower_topic for x in ('history', 'ancient', 'civilization', 'empire', 'archaeology')):
+        style, prefixes = 'historical / archival', ['Lost Empire', 'Old World', 'Timeworn', 'Past Echo', 'Archive', 'Dust & Stone', 'First Dawn', 'Buried Age', 'Chronicle', 'Ruins']
+        suffixes = ['Atlas', 'Ledger', 'Chronicle', 'Vault', 'Decoded']
+    elif any(x in lower_topic for x in ('business', 'finance', 'money', 'startup', 'company', 'downfall')):
+        style, prefixes = 'business / rise-and-fall', ['Broken Balance', 'Market Ghost', 'Profit & Loss', 'Boardroom', 'Cashflow', 'Exit Story', 'Valuation', 'Downturn', 'The Last Pitch', 'Capital']
+        suffixes = ['Files', 'Brief', 'Ledger', 'Decoded', 'Watch']
+    elif any(x in lower_topic for x in ('science', 'space', 'technology', 'tech', 'future')):
+        style, prefixes = 'science / future-facing', ['Signal', 'Nova', 'Quantum', 'Orbit', 'Circuit', 'Deep Field', 'Future', 'Data', 'Beyond', 'The Lab']
+        suffixes = ['Atlas', 'Brief', 'Archive', 'Decoded', 'Frontier']
+    elif any(x in lower_topic for x in ('mystery', 'unexplained', 'paranormal', 'secret', 'conspiracy')):
+        style, prefixes = 'mystery / unexplained', ['Hidden', 'Unknown', 'Whisper', 'Strange', 'Night', 'Beyond', 'Unseen', 'Black Box', 'The Missing', 'Veil']
+        suffixes = ['Files', 'Signal', 'Archive', 'Decoded', 'Watch']
+    else:
+        style, prefixes = 'editorial / documentary', ['Northstar', 'Mosaic', 'Open Frame', 'True Line', 'Storycraft', 'Wide Lens', 'The Long Cut', 'Field Note', 'Common Thread', 'Worldview']
+        suffixes = ['Atlas', 'Brief', 'Archive', 'Signal', 'Journal']
+    candidates = [(prefix + ' ' + suffix).strip() for prefix in prefixes for suffix in suffixes][:50]
     suggestions = []
     checked_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-    for label, slug in suffixes:
-        name = f'{display} {label}'
-        handle = '@' + base + slug
+    for name in candidates:
+        handle = '@' + re.sub(r'[^a-z0-9]', '', name.lower())
         try:
             existing = api('channels', part='id,snippet', forHandle=handle).get('items', [])
-        except ValueError:
-            existing = []
+        except ValueError as exc:
+            suggestions.append({'name': name, 'handle': handle, 'status': 'check failed',
+                                'available_looking': False, 'checked_at': checked_at,
+                                'note': 'Live check could not complete: ' + str(exc)[:140]})
+            continue
         is_available = not bool(existing)
         suggestions.append({'name': name, 'handle': handle,
                             'status': 'available now' if is_available else 'unavailable — public match found',
                             'available_looking': is_available,
                             'checked_at': checked_at,
                             'note': 'Live exact public-handle check at this time. Availability can change if someone claims it.'})
-    return {'name_lab': True, 'topic': topic, 'successful_channels': successful,
+    return {'name_lab': True, 'topic': topic, 'style': style, 'successful_channels': successful,
             'suggestions': suggestions,
             'source': 'YouTube Data API · public channel search and exact handle resolution',
-            'note': 'Successful means the public channel appeared in the niche search and is ranked by subscribers, then total views. Every suggested username was checked live using exact public handle resolution.'}
+            'note': 'Style: ' + style + '. Successful channels are ranked by subscribers, then total views. All 50 suggested usernames were checked live using exact public handle resolution.'}
 
 
 def tool_run(kind, data):
