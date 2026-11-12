@@ -423,6 +423,63 @@ def notebook_search(topic, count=50, region='US', language='en', niche='', style
             'note': "Highest-view long-form videos in YouTube's returned public topic search. Shorts (<=180 seconds or tagged #shorts) are excluded; fewer than 50 means YouTube returned fewer matching long-form videos."}
 
 
+def channel_name_lab(topic, region='US', language='en', count=10):
+    """Find successful public channels for a niche and test concise handle ideas."""
+    topic = re.sub(r'\s+', ' ', str(topic or '').strip())[:120]
+    if not topic:
+        raise ValueError('Enter a niche or channel topic.')
+    try:
+        count = max(5, min(int(count or 10), 20))
+    except (TypeError, ValueError):
+        raise ValueError('Channel count must be between 5 and 20.')
+    page = api('search', part='snippet', q=topic, type='channel', maxResults=50,
+               order='relevance', regionCode=region, relevanceLanguage=language)
+    ids = list(dict.fromkeys(x.get('id', {}).get('channelId') for x in page.get('items', [])
+                             if x.get('id', {}).get('channelId')))
+    items = api('channels', part='snippet,statistics', id=','.join(ids)).get('items', []) if ids else []
+    by_id = {x['id']: x for x in items}
+    successful = []
+    for cid in ids:
+        x = by_id.get(cid)
+        if not x:
+            continue
+        sn, st = x.get('snippet', {}), x.get('statistics', {})
+        subs = int(st['subscriberCount']) if 'subscriberCount' in st and not st.get('hiddenSubscriberCount') else None
+        views = int(st['viewCount']) if 'viewCount' in st else None
+        successful.append({'id': cid, 'name': sn.get('title', ''), 'handle': sn.get('customUrl', ''),
+                           'url': 'https://www.youtube.com/channel/' + cid,
+                           'subscribers': subs, 'views': views,
+                           'videos': int(st['videoCount']) if 'videoCount' in st else None,
+                           'description': sn.get('description', '')})
+    successful.sort(key=lambda x: (x.get('subscribers') or 0, x.get('views') or 0), reverse=True)
+    successful = successful[:count]
+
+    words = [re.sub(r'[^a-z0-9]', '', x.lower()) for x in re.findall(r'[A-Za-z0-9]+', topic)]
+    words = [x for x in words if len(x) >= 3]
+    base = ''.join(words[:2]) or 'story'
+    display = ' '.join(x.capitalize() for x in words[:2]) or 'Story'
+    suffixes = [('Atlas', 'atlas'), ('Archive', 'archive'), ('Brief', 'brief'),
+                ('Files', 'files'), ('Signal', 'signal'), ('Vault', 'vault'),
+                ('Chronicle', 'chronicle'), ('Lens', 'lens'), ('Decoded', 'decoded'),
+                ('Uncovered', 'uncovered')]
+    suggestions = []
+    taken_names = {re.sub(r'[^a-z0-9]', '', x['name'].lower()) for x in successful}
+    for label, slug in suffixes:
+        name = f'{display} {label}'
+        handle = '@' + base + slug
+        try:
+            existing = api('channels', part='id,snippet', forHandle=handle).get('items', [])
+        except ValueError:
+            existing = []
+        suggestions.append({'name': name, 'handle': handle, 'status': 'public match found' if existing else 'no public match found',
+                            'available_looking': not bool(existing),
+                            'note': 'YouTube final availability is checked when creating the channel.'})
+    return {'name_lab': True, 'topic': topic, 'successful_channels': successful,
+            'suggestions': suggestions,
+            'source': 'YouTube Data API · public channel search and exact handle resolution',
+            'note': 'Successful means the public channel appeared in the niche search and is ranked by subscribers, then total views. Handle status is a live public-resolution check, not a reservation guarantee.'}
+
+
 def tool_run(kind, data):
     if kind == 'source-context':
         return source_context(data)
@@ -508,6 +565,8 @@ def tool_run(kind, data):
     elif kind=='notebook':
         return notebook_search(q, data.get('count') or 50, region, language,
                                data.get('niche') or '', data.get('style') or '', data.get('keyword') or '', data.get('focus') or '')
+    elif kind=='name-lab':
+        return channel_name_lab(q, region, language, data.get('count') or 10)
     elif kind=='rank':
         vid=video_id(q)
         keywords=[x.strip() for x in str(data.get('keywords','')).splitlines() if x.strip()][:5]
