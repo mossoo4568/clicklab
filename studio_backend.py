@@ -427,15 +427,48 @@ TOPIC_PRESETS = {
     'business': {
         'label': 'Business, money & companies',
         'queries': ['business scandals', 'company collapse', 'corporate fraud', 'money empires', 'finance mysteries'],
-        'subniches': ['Corporate Collapses', 'Financial Frauds', 'Startup Failures', 'Billionaire Scandals', 'Brand Empires', 'Stock Market Crashes', 'Banking Crises', 'Oil & Energy Wars', 'Tech Company Wars', 'Economic Bubbles']},
+        'subniches': ['Corporate Collapses', 'Financial Frauds', 'Startup Failures', 'Billionaire Scandals', 'Brand Empires', 'Stock Market Crashes', 'Banking Crises', 'Oil & Energy Wars', 'Tech Company Wars', 'Economic Bubbles'],
+        'subqueries': {
+            'corporate collapses': ['company collapse documentary', 'corporate bankruptcy stories', 'rise and fall of companies', 'business failure investigation'],
+            'financial frauds': ['financial fraud documentary', 'ponzi scheme investigation', 'accounting scandal explained', 'billion dollar fraud cases'],
+            'startup failures': ['startup failure documentary', 'tech startup collapse', 'why startups fail', 'failed unicorn companies'],
+            'billionaire scandals': ['billionaire scandal documentary', 'richest people controversy', 'tycoon downfall investigation', 'billionaire fraud case'],
+            'brand empires': ['brand empire rise and fall', 'famous brands business history', 'consumer company scandals', 'retail empire collapse'],
+            'stock market crashes': ['stock market crash documentary', 'financial crisis investigation', 'market bubble collapse', 'traders who lost billions'],
+            'banking crises': ['bank collapse documentary', 'banking crisis explained', 'bank fraud investigation', 'financial institution failure'],
+            'oil & energy wars': ['oil company scandal', 'energy industry investigation', 'oil crisis documentary', 'petroleum empire downfall'],
+            'tech company wars': ['technology company war', 'tech industry rivalry documentary', 'silicon valley scandal', 'technology company collapse'],
+            'economic bubbles': ['economic bubble documentary', 'housing bubble collapse', 'debt crisis explained', 'economic crash investigation']}},
     'crime': {
         'label': 'True crime & mysteries',
         'queries': ['true crime mysteries', 'unsolved crimes', 'missing person mysteries', 'criminal investigations', 'mystery cases'],
-        'subniches': ['Serial Killers', 'Missing Persons', 'Unsolved Murders', 'Cold Cases', 'Cults & Secret Societies', 'Famous Heists', 'Cybercrime Cases', 'Courtroom Mysteries', 'Disappearances', 'Criminal Conspiracies']},
+        'subniches': ['Serial Killers', 'Missing Persons', 'Unsolved Murders', 'Cold Cases', 'Cults & Secret Societies', 'Famous Heists', 'Cybercrime Cases', 'Courtroom Mysteries', 'Disappearances', 'Criminal Conspiracies'],
+        'subqueries': {
+            'serial killers': ['serial killer documentary', 'serial killer investigation', 'profiling notorious killers', 'unsolved serial murder'],
+            'missing persons': ['missing person documentary', 'disappearance investigation', 'people who vanished', 'missing persons mystery'],
+            'unsolved murders': ['unsolved murder documentary', 'cold case murder investigation', 'murder mystery case', 'killer never caught'],
+            'cold cases': ['cold case documentary', 'old murder case reopened', 'new evidence cold case', 'solved after decades crime'],
+            'cults & secret societies': ['cult documentary', 'secret society mystery', 'doomsday cult investigation', 'strange cult crimes'],
+            'famous heists': ['famous heist documentary', 'unsolved robbery mystery', 'largest robberies investigation', 'stolen treasure case'],
+            'cybercrime cases': ['cybercrime documentary', 'hacker investigation', 'dark web crime case', 'online fraud ring'],
+            'courtroom mysteries': ['courtroom mystery documentary', 'wrongful conviction investigation', 'trial that shocked the world', 'murder trial mystery'],
+            'disappearances': ['strange disappearances documentary', 'mysterious disappearance case', 'vanished without a trace', 'unexplained missing person'],
+            'criminal conspiracies': ['criminal conspiracy documentary', 'crime cover up investigation', 'underworld conspiracy case', 'organized crime mystery']}},
     'history': {
         'label': 'History, wars & lost civilizations',
         'queries': ['lost civilizations', 'ancient history mysteries', 'forgotten wars', 'ancient discoveries', 'military history'],
-        'subniches': ['Ancient Civilizations', 'Lost Cities', 'Forgotten Wars', 'Military Strategies', 'Empire Collapses', 'Ancient Technology', 'Archaeology Discoveries', 'Royal Scandals', 'Historic Explorers', 'Historical Mysteries']},
+        'subniches': ['Ancient Civilizations', 'Lost Cities', 'Forgotten Wars', 'Military Strategies', 'Empire Collapses', 'Ancient Technology', 'Archaeology Discoveries', 'Royal Scandals', 'Historic Explorers', 'Historical Mysteries'],
+        'subqueries': {
+            'ancient civilizations': ['ancient civilization documentary', 'rise of ancient civilizations', 'first cities history', 'ancient people mysteries'],
+            'lost cities': ['lost city documentary', 'ancient city discovered', 'forgotten cities archaeology', 'buried city mystery'],
+            'forgotten wars': ['forgotten war documentary', 'obscure battles history', 'lost military campaigns', 'war history nobody remembers'],
+            'military strategies': ['ancient military strategy', 'greatest battle tactics history', 'war strategy documentary', 'military deception history'],
+            'empire collapses': ['empire collapse documentary', 'why empires fell', 'fall of ancient kingdoms', 'civilization collapse mystery'],
+            'ancient technology': ['ancient technology mystery', 'inventions ahead of their time', 'lost ancient engineering', 'ancient machines explained'],
+            'archaeology discoveries': ['archaeology discovery documentary', 'new ancient discovery', 'archaeological mystery explained', 'excavation reveals history'],
+            'royal scandals': ['royal scandal history', 'kings and queens scandals', 'royal murder mystery', 'dynasty betrayal documentary'],
+            'historic explorers': ['famous explorer documentary', 'lost expedition mystery', 'deadly exploration history', 'unknown lands explorers'],
+            'historical mysteries': ['historical mystery documentary', 'unexplained events history', 'ancient mystery investigation', 'secrets buried in history']}},
 }
 
 
@@ -452,10 +485,13 @@ def topic_ideas(topic, region='US', language='en', count=50, preset='', subniche
     except (TypeError, ValueError):
         raise ValueError('Topic count must be between 1 and 1000.')
     selected_subniche = str(subniche or '').strip()
-    queries = [selected_subniche] if selected_subniche else (list(preset_cfg['queries']) if preset_cfg else [topic])
+    subquery_map = (preset_cfg or {}).get('subqueries', {})
+    expanded = subquery_map.get(selected_subniche.lower(), []) if selected_subniche else []
+    queries = list(expanded) if expanded else ([selected_subniche] if selected_subniche else (list(preset_cfg['queries']) if preset_cfg else [topic]))
     if selected_subniche and preset_cfg:
         queries += list(preset_cfg['queries'])
-    if topic and topic.lower() not in {q.lower() for q in queries}:
+    queries = list(dict.fromkeys(q for q in queries if q))
+    if topic and not (selected_subniche and topic.lower() == selected_subniche.lower()) and topic.lower() not in {q.lower() for q in queries}:
         queries.insert(0, topic)
     ids, next_pages = [], {q: None for q in queries}
     seen_ids = set()
@@ -485,6 +521,10 @@ def topic_ideas(topic, region='US', language='en', count=50, preset='', subniche
     if domain_terms:
         rows = [x for x in rows if any(t in set(re.findall(r'[a-z]+', (x.get('title') or '').lower())) for t in domain_terms)
                 and not any(marker in (x.get('title') or '').lower() for marker in music_markers)]
+    if selected_subniche and expanded:
+        generic_terms = {'documentary', 'documentaries', 'history', 'explained', 'investigation', 'mystery', 'mysteries', 'case', 'cases', 'the', 'and', 'of', 'why', 'how'}
+        focus_terms = {w for q in expanded for w in re.findall(r'[a-z]+', q.lower()) if len(w) > 3 and w not in generic_terms}
+        rows = [x for x in rows if any(w in set(re.findall(r'[a-z]+', (x.get('title') or '').lower())) for w in focus_terms)]
     stop = {'the', 'a', 'an', 'and', 'of', 'in', 'to', 'for', 'on', 'with', 'from', 'this', 'that',
             'how', 'why', 'what', 'when', 'where', 'documentary', 'documentaries', 'full', 'episode',
             'official', 'history', 'story', 'explained', 'part', 'complete', 'new', 'best', 'hours',
@@ -517,7 +557,7 @@ def topic_ideas(topic, region='US', language='en', count=50, preset='', subniche
                       'source_title': source.get('title', ''), 'source_channel': source.get('channel', ''),
                       'views': source.get('views'), 'video_url': 'https://www.youtube.com/watch?v=' + source.get('id', '')})
     return {'topic_ideas': True, 'query': topic, 'ideas': ideas, 'requested': count,
-            'preset': preset_cfg['label'] if preset_cfg else '', 'subniche': selected_subniche, 'sample_size': len(rows),
+            'preset': preset_cfg['label'] if preset_cfg else '', 'subniche': selected_subniche, 'search_queries': queries, 'sample_size': len(rows),
             'source': 'YouTube Data API · distinct public long-form video titles',
             'note': 'Every idea is a 2-4 word phrase taken from a different returned YouTube title. Shorts, duplicate videos and generic filler phrases are excluded; no title-based phrase is invented.'}
 
