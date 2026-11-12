@@ -5253,9 +5253,22 @@ def yt_get(endpoint, params):
         p["key"] = ks[idx]
         url = YT_API + endpoint + "?" + urllib.parse.urlencode(p)
         try:
-            j = json.loads(http_get(url, timeout=40).decode("utf-8", "replace"))
-            _yt_cur[0] = idx
-            return j
+            for attempt in range(3):
+                try:
+                    j = json.loads(http_get(url, timeout=40).decode("utf-8", "replace"))
+                    _yt_cur[0] = idx
+                    return j
+                except Exception as e:
+                    # YouTube/CDN kabhi response bhejne se pehle socket close kar deta hai.
+                    # Is transient transport failure ko ek hi run me short backoff ke saath retry
+                    # karo; API errors neeche apni asli message ke saath return honge.
+                    text = str(e).lower()
+                    transient = ('remote end closed' in text or 'connection reset' in text or
+                                 'connection aborted' in text or 'timed out' in text or
+                                 'incomplete read' in text or 'temporarily unavailable' in text)
+                    if not transient or attempt == 2:
+                        raise
+                    time.sleep(0.7 * (attempt + 1))
         except urllib.error.HTTPError as e:
             msg = ""
             try:
