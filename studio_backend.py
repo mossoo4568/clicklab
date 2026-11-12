@@ -423,6 +423,58 @@ def notebook_search(topic, count=50, region='US', language='en', niche='', style
             'note': "Highest-view long-form videos in YouTube's returned public topic search. Shorts (<=180 seconds or tagged #shorts) are excluded; fewer than 50 means YouTube returned fewer matching long-form videos."}
 
 
+def topic_ideas(topic, region='US', language='en', count=50):
+    """Extract 2-4 word topic phrases directly from public YouTube titles."""
+    topic = re.sub(r'\s+', ' ', str(topic or '').strip())[:120]
+    if not topic:
+        raise ValueError('Enter a niche or topic for topic ideas.')
+    try:
+        count = max(10, min(int(count or 50), 50))
+    except (TypeError, ValueError):
+        raise ValueError('Topic count must be between 10 and 50.')
+    page = api('search', part='snippet', q=topic, type='video', maxResults=50,
+               order='relevance', regionCode=region, relevanceLanguage=language)
+    ids = list(dict.fromkeys(x.get('id', {}).get('videoId') for x in page.get('items', [])
+                             if x.get('id', {}).get('videoId')))
+    rows = [x for x in videos(ids) if (x.get('seconds') or 0) > 180 and '#shorts' not in (x.get('title') or '').lower()]
+    stop = {'the', 'a', 'an', 'and', 'of', 'in', 'to', 'for', 'on', 'with', 'from', 'this', 'that',
+            'how', 'why', 'what', 'when', 'where', 'documentary', 'documentaries', 'full', 'episode',
+            'official', 'history', 'story', 'explained', 'part', 'complete', 'new', 'best', 'hours',
+            'hour', 'marathon', 'watch', 'discover'}
+    query_words = {x.lower() for x in re.findall(r'[A-Za-z0-9]+', topic) if len(x) > 2}
+    found = {}
+    for row in rows:
+        raw = re.findall(r"[A-Za-z0-9][A-Za-z0-9'&-]*", row.get('title') or '')
+        for size in (4, 3, 2):
+            for i in range(len(raw) - size + 1):
+                words = raw[i:i + size]
+                lower = [x.lower() for x in words]
+                if lower[0] in stop or lower[-1] in stop or sum(x not in stop for x in lower) < 2:
+                    continue
+                if any(re.fullmatch(r'\d+(?:st|nd|rd|th)?', x) for x in lower):
+                    continue
+                if all(x in query_words or x in stop for x in lower):
+                    continue
+                key = re.sub(r'[^a-z0-9]+', ' ', ' '.join(words).lower()).strip()
+                if key in found:
+                    found[key]['mentions'] += 1
+                    found[key]['views'] = max(found[key]['views'], row.get('views') or 0)
+                    found[key]['sources'].append(row)
+                else:
+                    found[key] = {'topic': ' '.join(words), 'mentions': 1, 'views': row.get('views') or 0,
+                                  'sources': [row]}
+    ranked = sorted(found.values(), key=lambda x: (x['mentions'], x['views']), reverse=True)[:count]
+    ideas = []
+    for x in ranked:
+        source = max(x['sources'], key=lambda r: r.get('views') or 0)
+        ideas.append({'topic': x['topic'], 'words': len(x['topic'].split()), 'mentions': x['mentions'],
+                      'source_title': source.get('title', ''), 'source_channel': source.get('channel', ''),
+                      'views': source.get('views'), 'video_url': 'https://www.youtube.com/watch?v=' + source.get('id', '')})
+    return {'topic_ideas': True, 'query': topic, 'ideas': ideas, 'requested': count,
+            'sample_size': len(rows), 'source': 'YouTube Data API · phrases extracted from public long-form video titles',
+            'note': 'Every idea is a 2-4 word phrase taken from returned YouTube titles. Shorts and generic filler phrases are excluded; no title-based phrase is invented.'}
+
+
 def channel_name_lab(topic, region='US', language='en', count=10):
     """Find successful public channels for a niche and test concise handle ideas."""
     topic = re.sub(r'\s+', ' ', str(topic or '').strip())[:120]
@@ -582,6 +634,8 @@ def tool_run(kind, data):
     elif kind=='notebook':
         return notebook_search(q, data.get('count') or 50, region, language,
                                data.get('niche') or '', data.get('style') or '', data.get('keyword') or '', data.get('focus') or '')
+    elif kind=='topic-ideas':
+        return topic_ideas(q, region, language, data.get('count') or 50)
     elif kind=='name-lab':
         return channel_name_lab(q, region, language, data.get('count') or 10)
     elif kind=='rank':
