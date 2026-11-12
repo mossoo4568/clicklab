@@ -150,3 +150,4 @@ layout{flex-direction:row;align-items:flex-start}.app{width:0;max-width:100%;min
 .media-auto-edit-button{color:var(--accent)}
 .notebook-export-label{align-self:center;color:var(--tx2);font-size:11px;font-weight:700;margin-left:4px}
 .notebook-metadata-help{margin:10px 0 14px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;color:var(--mut);font-size:11px}
+.tool-favorite{margin-left:auto;color:var(--mut);font-size:21px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:8px;transition:color .15s,background .15s}.tool-favorite:hover,.tool-favorite.on{color:#f4c542;background:rgba(244,197,66,.12)}#tool-page-fav .tool-favorite{display:inline-block;margin-left:0;border:1px solid var(--border);padding:7px 11px}
