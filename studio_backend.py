@@ -487,7 +487,18 @@ def topic_ideas(topic, region='US', language='en', count=50, preset='', subniche
     selected_subniche = str(subniche or '').strip()
     subquery_map = (preset_cfg or {}).get('subqueries', {})
     expanded = subquery_map.get(selected_subniche.lower(), []) if selected_subniche else []
-    queries = list(expanded) if expanded else ([selected_subniche] if selected_subniche else (list(preset_cfg['queries']) if preset_cfg else [topic]))
+    if selected_subniche and expanded:
+        variants = [
+            f'{selected_subniche} full documentary',
+            f'{selected_subniche} deep dive',
+            f'{selected_subniche} untold stories',
+            f'{selected_subniche} explained',
+            f'{selected_subniche} investigation',
+            f'{selected_subniche} case study',
+        ]
+        queries = list(expanded) + variants
+    else:
+        queries = [selected_subniche] if selected_subniche else (list(preset_cfg['queries']) if preset_cfg else [topic])
     if selected_subniche and preset_cfg:
         queries += list(preset_cfg['queries'])
     queries = list(dict.fromkeys(q for q in queries if q))
