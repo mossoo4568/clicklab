@@ -615,6 +615,80 @@ def channel_name_lab(topic, region='US', language='en', count=10):
             'note': 'Style: ' + style + '. Successful channels are ranked by subscribers, then total views. All 50 suggested usernames were checked live using exact public handle resolution.'}
 
 
+def topic_opportunity(topic, region='US', language='en', count=10):
+    """Build a transparent VidGenius-style opportunity brief from public search data."""
+    topic = re.sub(r'\s+', ' ', str(topic or '').strip())[:160]
+    if not topic:
+        raise ValueError('Enter a topic or phrase.')
+    try:
+        count = max(5, min(int(count or 10), 50))
+    except (TypeError, ValueError):
+        raise ValueError('Video count must be between 5 and 50.')
+    sample = search(topic, region, language, order='relevance')
+    # Keep the opportunity view focused on normal videos. A short sample is
+    # preferable to silently presenting Shorts as long-form competition.
+    rows = [v for v in sample if (v.get('seconds') or 0) > 180 and '#shorts' not in (v.get('title') or '').lower()]
+    rows = sorted(rows, key=lambda v: (v.get('views_per_day') or 0, v.get('views') or 0), reverse=True)
+    top = rows[:count]
+    view_values = [v['views'] for v in top if v.get('views') is not None]
+    day_values = [v['views_per_day'] for v in top if v.get('views_per_day') is not None]
+    subs = [v.get('channel_subscribers') for v in top if v.get('channel_subscribers') is not None]
+    # Search results do not include channel statistics, so enrich the distinct
+    # channels in one bounded request and attach the public subscriber count.
+    channel_ids = list(dict.fromkeys(v.get('channel_id') for v in top if v.get('channel_id')))[:50]
+    channel_map = {}
+    if channel_ids:
+        for c in api('channels', part='snippet,statistics', id=','.join(channel_ids)).get('items', []):
+            st = c.get('statistics', {})
+            channel_map[c['id']] = None if st.get('hiddenSubscriberCount') else int(st['subscriberCount']) if 'subscriberCount' in st else None
+    for v in top:
+        v['channel_subscribers'] = channel_map.get(v.get('channel_id'))
+    subs = [v.get('channel_subscribers') for v in top if v.get('channel_subscribers') is not None]
+    exact_words = {w.lower() for w in re.findall(r"[A-Za-z0-9']+", topic) if len(w) > 2}
+    title_matches = sum(1 for v in top if exact_words and exact_words.issubset({w.lower() for w in re.findall(r"[A-Za-z0-9']+", v.get('title') or '')}))
+    for v in top:
+        v['title_match'] = bool(exact_words and exact_words.issubset({w.lower() for w in re.findall(r"[A-Za-z0-9']+", v.get('title') or '')}))
+        v['topic_outlier'] = bool(v.get('views') and v.get('channel_subscribers') and v['views'] >= v['channel_subscribers'] * 3)
+        v['video_url'] = 'https://www.youtube.com/watch?v=' + v['id']
+        v['channel_url'] = 'https://www.youtube.com/channel/' + v['channel_id'] if v.get('channel_id') else ''
+    # Related phrases are extracted from returned titles, not invented from a
+    # title generator. They are discovery leads, not keyword/search-volume data.
+    stop = {'the','a','an','and','of','in','to','for','on','with','from','this','that','how','why','what','when','where','full','episode','official','story','explained','part','complete','new','best','hours','hour','watch','discover'}
+    phrases = {}
+    for v in top:
+        words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'&-]*", v.get('title') or '')
+        for size in (4, 3, 2):
+            for i in range(len(words) - size + 1):
+                part = words[i:i + size]
+                low = [x.lower() for x in part]
+                if low[0] in stop or low[-1] in stop or sum(x not in stop for x in low) < 2:
+                    continue
+                phrase = ' '.join(part)
+                key = re.sub(r'[^a-z0-9]+', ' ', phrase.lower()).strip()
+                if key in exact_words or all(x in exact_words for x in low):
+                    continue
+                phrases[key] = {'phrase': phrase, 'videos': phrases.get(key, {}).get('videos', 0) + 1}
+    related = sorted(phrases.values(), key=lambda x: (-x['videos'], x['phrase'].lower()))[:12]
+    median_views = statistics.median(view_values) if view_values else None
+    median_day = statistics.median(day_values) if day_values else None
+    demand = 'High' if median_views is not None and median_views >= 100000 else 'Medium' if median_views is not None and median_views >= 10000 else 'Low / insufficient sample'
+    competition = 'High' if len(top) >= 8 and sum(1 for x in subs if x >= 100000) >= 4 else 'Medium' if top else 'Unknown'
+    return {'topic_opportunity': True, 'query': topic, 'rows': top, 'related_phrases': related,
+            'sample_size': len(top), 'searched_size': len(sample), 'long_form_only': True,
+            'demand': demand, 'competition': competition, 'title_match_count': title_matches,
+            'median_views': median_views, 'median_views_per_day': median_day,
+            'top_views_per_day': max(day_values) if day_values else None,
+            'channel_subscriber_median': statistics.median(subs) if subs else None,
+            'summary': [
+                'The returned long-form sample has a median of ' + (f"{median_views:,.0f}" if median_views is not None else 'no') + ' lifetime views.',
+                'The fastest-moving returned video is estimated at ' + (f"{max(day_values):,.0f}" if day_values else 'no measurable') + ' lifetime views per day.',
+                f'{title_matches} of {len(top)} returned titles contain all query words.' if top else 'No qualifying long-form titles were returned.',
+                'A star marks a video whose lifetime views are at least 3× its channel subscriber count.'
+            ],
+            'source': 'YouTube Data API · public long-form search sample',
+            'note': 'Demand and competition are transparent signals from this API sample, not YouTube search volume, CTR, or a guarantee of future views. Related phrases come from returned titles only.'}
+
+
 def tool_run(kind, data):
     if kind == 'source-context':
         return source_context(data)
@@ -704,6 +778,8 @@ def tool_run(kind, data):
         return topic_ideas(q, region, language, data.get('count') or 50, data.get('preset') or '', data.get('subniche') or '', data.get('category') or '')
     elif kind=='name-lab':
         return channel_name_lab(q, region, language, data.get('count') or 10)
+    elif kind=='topic-opportunity':
+        return topic_opportunity(q, region, language, data.get('count') or 10)
     elif kind=='rank':
         vid=video_id(q)
         keywords=[x.strip() for x in str(data.get('keywords','')).splitlines() if x.strip()][:5]

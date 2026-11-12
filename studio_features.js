@@ -505,7 +505,7 @@ toolOpen=function(id){
 document.addEventListener('focusin',()=>{if($('#esc-panel'))efSourceCurrent()});
 const efSourceRenderResult=renderToolResult;
 renderToolResult=function(t,r){
- efSourceRenderResult(t,r);const el=$('#tool-result');if(!el)return;
+ efSourceRenderResult(t,r);const el=$('#tool-result');if(!el||r.topic_opportunity)return;
  for(const sm of [r.summary,...(r.profiles||[]).map(p=>p.summary)].filter(Boolean)){
   el.insertAdjacentHTML('beforeend',table(['Sample scope / coverage','Value'],[['Source scope',sm.source_scope||'Returned sample only'],['Views available / sampled',sm.views_known_videos==null?'Unknown':sm.views_known_videos+' / '+sm.sample],['Engagement denominator (views)',sm.engagement_denominator_views],['Engagement excluded videos',sm.engagement_excluded_videos],['Like-rate samples / denominator views',sm.like_rate_videos==null?'Unknown':sm.like_rate_videos+' / '+sm.like_rate_denominator_views],['Comment-rate samples / denominator views',sm.comment_rate_videos==null?'Unknown':sm.comment_rate_videos+' / '+sm.comment_rate_denominator_views],['Observed publication dates',sm.published_from&&sm.published_to?sm.published_from+' → '+sm.published_to:'Unavailable'],['Duration unknown videos',sm.duration_unknown_videos]])+snote(sm.engagement_method||'Rates exclude unavailable counts; durations do not confirm Shorts.'));
  }
