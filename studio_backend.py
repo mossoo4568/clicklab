@@ -423,20 +423,62 @@ def notebook_search(topic, count=50, region='US', language='en', niche='', style
             'note': "Highest-view long-form videos in YouTube's returned public topic search. Shorts (<=180 seconds or tagged #shorts) are excluded; fewer than 50 means YouTube returned fewer matching long-form videos."}
 
 
-def topic_ideas(topic, region='US', language='en', count=50):
-    """Extract 2-4 word topic phrases directly from public YouTube titles."""
+TOPIC_PRESETS = {
+    'business': {
+        'label': 'Business, money & companies',
+        'queries': ['business scandals', 'company collapse', 'corporate fraud', 'money empires', 'finance mysteries']},
+    'crime': {
+        'label': 'True crime & mysteries',
+        'queries': ['true crime mysteries', 'unsolved crimes', 'missing person mysteries', 'criminal investigations', 'mystery cases']},
+    'history': {
+        'label': 'History, wars & lost civilizations',
+        'queries': ['lost civilizations', 'ancient history mysteries', 'forgotten wars', 'ancient discoveries', 'military history']},
+}
+
+
+def topic_ideas(topic, region='US', language='en', count=50, preset=''):
+    """Extract unique 2-4 word topic phrases from distinct public long-form videos."""
     topic = re.sub(r'\s+', ' ', str(topic or '').strip())[:120]
+    preset_cfg = TOPIC_PRESETS.get(str(preset or '').lower())
+    if not topic and preset_cfg:
+        topic = preset_cfg['label']
     if not topic:
-        raise ValueError('Enter a niche or topic for topic ideas.')
+        raise ValueError('Choose a channel preset or enter a focus topic.')
     try:
-        count = max(10, min(int(count or 50), 50))
+        count = max(1, min(int(count or 50), 1000))
     except (TypeError, ValueError):
-        raise ValueError('Topic count must be between 10 and 50.')
-    page = api('search', part='snippet', q=topic, type='video', maxResults=50,
-               order='relevance', regionCode=region, relevanceLanguage=language)
-    ids = list(dict.fromkeys(x.get('id', {}).get('videoId') for x in page.get('items', [])
-                             if x.get('id', {}).get('videoId')))
+        raise ValueError('Topic count must be between 1 and 1000.')
+    queries = list(preset_cfg['queries']) if preset_cfg else [topic]
+    if topic and topic.lower() not in {q.lower() for q in queries}:
+        queries.insert(0, topic)
+    ids, next_pages = [], {q: None for q in queries}
+    seen_ids = set()
+    # Search several focused queries and pages; every accepted result keeps its own video ID.
+    for _ in range(20):
+        made_progress = False
+        for q in queries:
+            params = {'part': 'snippet', 'q': q, 'type': 'video', 'maxResults': 50,
+                      'order': 'relevance', 'regionCode': region, 'relevanceLanguage': language}
+            if next_pages[q]:
+                params['pageToken'] = next_pages[q]
+            page = api('search', **params)
+            for item in page.get('items', []):
+                vid = item.get('id', {}).get('videoId')
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid); ids.append(vid); made_progress = True
+            next_pages[q] = page.get('nextPageToken')
+        if len(ids) >= max(count * 2, 100) or not made_progress or not any(next_pages.values()):
+            break
     rows = [x for x in videos(ids) if (x.get('seconds') or 0) > 180 and '#shorts' not in (x.get('title') or '').lower()]
+    domain_terms = {
+        'business': {'business', 'money', 'company', 'companies', 'corporate', 'finance', 'bank', 'billionaire', 'empire', 'market', 'fraud', 'scam', 'stock', 'wealth', 'collapse', 'bankruptcy', 'economic', 'economy', 'oil', 'tech', 'startup'},
+        'crime': {'crime', 'murder', 'killer', 'missing', 'case', 'mystery', 'unsolved', 'investigation', 'detective', 'disappearance', 'serial', 'cold', 'evidence', 'suspect', 'criminal', 'death', 'vanished', 'kidnapping', 'heist', 'mafia', 'conspiracy'},
+        'history': {'ancient', 'history', 'war', 'wars', 'empire', 'civilization', 'kingdom', 'battle', 'army', 'roman', 'egypt', 'egyptian', 'viking', 'medieval', 'lost', 'ruins', 'archaeology', 'archaeological', 'dynasty', 'sumerian', 'mongol', 'invasion', 'fortress', 'pharaoh'}
+    }.get(str(preset or '').lower(), set())
+    music_markers = {'official video', 'official audio', 'lyrics', 'lyric video', 'remix', 'soundtrack', 'feat.', 'ft.', 'music video'}
+    if domain_terms:
+        rows = [x for x in rows if any(t in set(re.findall(r'[a-z]+', (x.get('title') or '').lower())) for t in domain_terms)
+                and not any(marker in (x.get('title') or '').lower() for marker in music_markers)]
     stop = {'the', 'a', 'an', 'and', 'of', 'in', 'to', 'for', 'on', 'with', 'from', 'this', 'that',
             'how', 'why', 'what', 'when', 'where', 'documentary', 'documentaries', 'full', 'episode',
             'official', 'history', 'story', 'explained', 'part', 'complete', 'new', 'best', 'hours',
@@ -456,23 +498,22 @@ def topic_ideas(topic, region='US', language='en', count=50):
                 if all(x in query_words or x in stop for x in lower):
                     continue
                 key = re.sub(r'[^a-z0-9]+', ' ', ' '.join(words).lower()).strip()
-                if key in found:
-                    found[key]['mentions'] += 1
-                    found[key]['views'] = max(found[key]['views'], row.get('views') or 0)
-                    found[key]['sources'].append(row)
-                else:
-                    found[key] = {'topic': ' '.join(words), 'mentions': 1, 'views': row.get('views') or 0,
-                                  'sources': [row]}
-    ranked = sorted(found.values(), key=lambda x: (x['mentions'], x['views']), reverse=True)[:count]
+                score = (2 if size == 3 else 1 if size == 4 else 0) + sum(x not in stop for x in lower)
+                candidate = {'topic': ' '.join(words), 'words': size, 'score': score, 'views': row.get('views') or 0}
+                current = found.get(row.get('id'))
+                if current is None or (candidate['score'], candidate['views']) > (current['score'], current['row'].get('views') or 0):
+                    found[row.get('id')] = {'topic': candidate['topic'], 'words': size, 'score': candidate['score'], 'row': row}
+    ranked = sorted(found.values(), key=lambda x: (x['score'], x['row'].get('views') or 0), reverse=True)[:count]
     ideas = []
     for x in ranked:
-        source = max(x['sources'], key=lambda r: r.get('views') or 0)
-        ideas.append({'topic': x['topic'], 'words': len(x['topic'].split()), 'mentions': x['mentions'],
+        source = x['row']
+        ideas.append({'topic': x['topic'], 'words': x['words'], 'mentions': 1,
                       'source_title': source.get('title', ''), 'source_channel': source.get('channel', ''),
                       'views': source.get('views'), 'video_url': 'https://www.youtube.com/watch?v=' + source.get('id', '')})
     return {'topic_ideas': True, 'query': topic, 'ideas': ideas, 'requested': count,
-            'sample_size': len(rows), 'source': 'YouTube Data API · phrases extracted from public long-form video titles',
-            'note': 'Every idea is a 2-4 word phrase taken from returned YouTube titles. Shorts and generic filler phrases are excluded; no title-based phrase is invented.'}
+            'preset': preset_cfg['label'] if preset_cfg else '', 'sample_size': len(rows),
+            'source': 'YouTube Data API · distinct public long-form video titles',
+            'note': 'Every idea is a 2-4 word phrase taken from a different returned YouTube title. Shorts, duplicate videos and generic filler phrases are excluded; no title-based phrase is invented.'}
 
 
 def channel_name_lab(topic, region='US', language='en', count=10):
@@ -635,7 +676,7 @@ def tool_run(kind, data):
         return notebook_search(q, data.get('count') or 50, region, language,
                                data.get('niche') or '', data.get('style') or '', data.get('keyword') or '', data.get('focus') or '')
     elif kind=='topic-ideas':
-        return topic_ideas(q, region, language, data.get('count') or 50)
+        return topic_ideas(q, region, language, data.get('count') or 50, data.get('preset') or '')
     elif kind=='name-lab':
         return channel_name_lab(q, region, language, data.get('count') or 10)
     elif kind=='rank':
