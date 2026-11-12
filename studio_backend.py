@@ -426,17 +426,20 @@ def notebook_search(topic, count=50, region='US', language='en', niche='', style
 TOPIC_PRESETS = {
     'business': {
         'label': 'Business, money & companies',
-        'queries': ['business scandals', 'company collapse', 'corporate fraud', 'money empires', 'finance mysteries']},
+        'queries': ['business scandals', 'company collapse', 'corporate fraud', 'money empires', 'finance mysteries'],
+        'subniches': ['Corporate Collapses', 'Financial Frauds', 'Startup Failures', 'Billionaire Scandals', 'Brand Empires', 'Stock Market Crashes', 'Banking Crises', 'Oil & Energy Wars', 'Tech Company Wars', 'Economic Bubbles']},
     'crime': {
         'label': 'True crime & mysteries',
-        'queries': ['true crime mysteries', 'unsolved crimes', 'missing person mysteries', 'criminal investigations', 'mystery cases']},
+        'queries': ['true crime mysteries', 'unsolved crimes', 'missing person mysteries', 'criminal investigations', 'mystery cases'],
+        'subniches': ['Serial Killers', 'Missing Persons', 'Unsolved Murders', 'Cold Cases', 'Cults & Secret Societies', 'Famous Heists', 'Cybercrime Cases', 'Courtroom Mysteries', 'Disappearances', 'Criminal Conspiracies']},
     'history': {
         'label': 'History, wars & lost civilizations',
-        'queries': ['lost civilizations', 'ancient history mysteries', 'forgotten wars', 'ancient discoveries', 'military history']},
+        'queries': ['lost civilizations', 'ancient history mysteries', 'forgotten wars', 'ancient discoveries', 'military history'],
+        'subniches': ['Ancient Civilizations', 'Lost Cities', 'Forgotten Wars', 'Military Strategies', 'Empire Collapses', 'Ancient Technology', 'Archaeology Discoveries', 'Royal Scandals', 'Historic Explorers', 'Historical Mysteries']},
 }
 
 
-def topic_ideas(topic, region='US', language='en', count=50, preset=''):
+def topic_ideas(topic, region='US', language='en', count=50, preset='', subniche=''):
     """Extract unique 2-4 word topic phrases from distinct public long-form videos."""
     topic = re.sub(r'\s+', ' ', str(topic or '').strip())[:120]
     preset_cfg = TOPIC_PRESETS.get(str(preset or '').lower())
@@ -448,7 +451,10 @@ def topic_ideas(topic, region='US', language='en', count=50, preset=''):
         count = max(1, min(int(count or 50), 1000))
     except (TypeError, ValueError):
         raise ValueError('Topic count must be between 1 and 1000.')
-    queries = list(preset_cfg['queries']) if preset_cfg else [topic]
+    selected_subniche = str(subniche or '').strip()
+    queries = [selected_subniche] if selected_subniche else (list(preset_cfg['queries']) if preset_cfg else [topic])
+    if selected_subniche and preset_cfg:
+        queries += list(preset_cfg['queries'])
     if topic and topic.lower() not in {q.lower() for q in queries}:
         queries.insert(0, topic)
     ids, next_pages = [], {q: None for q in queries}
@@ -511,7 +517,7 @@ def topic_ideas(topic, region='US', language='en', count=50, preset=''):
                       'source_title': source.get('title', ''), 'source_channel': source.get('channel', ''),
                       'views': source.get('views'), 'video_url': 'https://www.youtube.com/watch?v=' + source.get('id', '')})
     return {'topic_ideas': True, 'query': topic, 'ideas': ideas, 'requested': count,
-            'preset': preset_cfg['label'] if preset_cfg else '', 'sample_size': len(rows),
+            'preset': preset_cfg['label'] if preset_cfg else '', 'subniche': selected_subniche, 'sample_size': len(rows),
             'source': 'YouTube Data API · distinct public long-form video titles',
             'note': 'Every idea is a 2-4 word phrase taken from a different returned YouTube title. Shorts, duplicate videos and generic filler phrases are excluded; no title-based phrase is invented.'}
 
@@ -676,7 +682,7 @@ def tool_run(kind, data):
         return notebook_search(q, data.get('count') or 50, region, language,
                                data.get('niche') or '', data.get('style') or '', data.get('keyword') or '', data.get('focus') or '')
     elif kind=='topic-ideas':
-        return topic_ideas(q, region, language, data.get('count') or 50, data.get('preset') or '')
+        return topic_ideas(q, region, language, data.get('count') or 50, data.get('preset') or '', data.get('subniche') or '')
     elif kind=='name-lab':
         return channel_name_lab(q, region, language, data.get('count') or 10)
     elif kind=='rank':
